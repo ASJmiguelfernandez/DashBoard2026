@@ -58,7 +58,7 @@ meses_str = {1: 'ENERO', 2: 'FEBRERO', 3: 'MARZO', 4: 'ABRIL', 5: 'MAYO', 6: 'JU
 
 meses_columnas_obj = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE']
 
-def get_best_match(query, choices, limit=1, threshold=80, scorer=None):
+def get_best_match(query, choices, threshold=80, scorer=None):
     if not isinstance(query, str) or pd.isna(query):
         return None
     _scorer = scorer if scorer is not None else fuzz.token_sort_ratio
@@ -150,7 +150,7 @@ if archivo_obj_a_leer and archivo_fact_a_leer:
         st.error(f"Hubo un problema al leer los archivos. Asegúrate de que las pestañas (CLIENTES, EQUIPOS, {año_analisis}) existen: {e}")
         st.stop()
 else:
-    st.info("👆 Por favor sube los **dos archivos Excel** en el menú de la izquierda o asegúrate de que existen en la ruta por defecto (`c:\\q\\...`) para comenzar el análisis.")
+    st.info("👆 Por favor sube los **tres archivos Excel** en el menú de la izquierda o asegúrate de que existen en la ruta por defecto (`c:\\q\\...`) para comenzar el análisis.")
     st.stop()
 
 with st.spinner("Procesando y cruzando datos..."):
