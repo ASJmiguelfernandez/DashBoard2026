@@ -12,6 +12,32 @@ import os as _os
 # ================================
 st.set_page_config(page_title="Acuerdo Servicios Jurídicos", page_icon="⚖️", layout="wide")
 
+# ================================
+# AUTENTICACIÓN
+# ================================
+def _check_login(usuario, password):
+    usuarios = st.secrets.get("usuarios", {})
+    return usuarios.get(usuario) == password
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col_login, _ = st.columns([1, 2])
+    with col_login:
+        st.markdown("### ⚖️ Acuerdo Servicios Jurídicos")
+        st.markdown("Introduce tus credenciales para acceder.")
+        usuario_input  = st.text_input("Usuario")
+        password_input = st.text_input("Contraseña", type="password")
+        if st.button("Entrar", use_container_width=True, type="primary"):
+            if _check_login(usuario_input, password_input):
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+    st.stop()
+
 # Header con logo
 _logo_path = _os.path.join(_os.path.dirname(__file__), "logo-acuerdo.svg")
 try:

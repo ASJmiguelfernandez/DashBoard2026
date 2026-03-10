@@ -1,3 +1,6 @@
+# Secrets locales — NO subir al repo
+.streamlit/secrets.toml
+
 # Excels con datos reales — NO subir al repo
 *.xlsx
 *.xls
