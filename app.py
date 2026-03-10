@@ -150,7 +150,7 @@ if archivo_obj_a_leer and archivo_fact_a_leer:
         st.error(f"Hubo un problema al leer los archivos. Asegúrate de que las pestañas (CLIENTES, EQUIPOS, {año_analisis}) existen: {e}")
         st.stop()
 else:
-    st.info("👆 Por favor sube los **tres archivos Excel** en el menú de la izquierda o asegúrate de que existen en la ruta por defecto (`c:\\q\\...`) para comenzar el análisis.")
+    st.info("👆 Por favor sube los **tres archivos Excel** en el menú de la izquierda para comenzar el análisis.")
     st.stop()
 
 with st.spinner("Procesando y cruzando datos..."):
