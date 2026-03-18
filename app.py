@@ -935,17 +935,20 @@ elif st.session_state.vista_actual == 'Cliente':
                         '% s/Expedientes':     lambda x: f"{x:.1f}%".replace('.', ','),
                     }
 
-                    def _style_total(row):
-                        if row['Recurso'] == 'TOTAL':
-                            return ['font-weight:bold;background-color:#f0f0f0'] * len(row)
-                        return [''] * len(row)
+                    cols_rec_display = ['Recurso', 'Expedientes', 'Exp. Totales Recurso', '% s/Total Recurso', '% s/Expedientes', 'Coste Mensual', 'Coste Acumulado']
+                    _idx_exp = cols_rec_display.index('Exp. Totales Recurso')
+
+                    def _style_table(row):
+                        is_total = row['Recurso'] == 'TOTAL'
+                        base = 'font-weight:bold;background-color:#f0f0f0;' if is_total else ''
+                        result = [base] * len(row)
+                        result[_idx_exp] = base + 'text-align:right'
+                        return result
 
                     st.caption("ℹ️ El **Coste Mensual** y **Coste Acumulado** son proporcionales a los expedientes del recurso en este cliente respecto a su total de expedientes (columna *% s/Total Recurso*).")
-                    cols_rec_display = ['Recurso', 'Expedientes', 'Exp. Totales Recurso', '% s/Total Recurso', '% s/Expedientes', 'Coste Mensual', 'Coste Acumulado']
                     styled_rec = (df_rec_cli[cols_rec_display]
                                   .style.format(fmt_rec)
-                                  .set_properties(subset=['Exp. Totales Recurso'], **{'text-align': 'right'})
-                                  .apply(_style_total, axis=1))
+                                  .apply(_style_table, axis=1))
                     st.dataframe(styled_rec, use_container_width=True, hide_index=True)
                 else:
                     st.info("No se encontraron recursos para este cliente en la Carga de Trabajo.")
