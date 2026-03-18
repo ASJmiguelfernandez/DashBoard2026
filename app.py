@@ -907,7 +907,7 @@ elif st.session_state.vista_actual == 'Cliente':
                                      'Coste Mensual': coste_mens, 'Coste Acumulado': coste_acum})
 
                 if rows_rec:
-                    df_rec_cli = pd.DataFrame(rows_rec).sort_values('Expedientes', ascending=False)
+                    df_rec_cli = pd.DataFrame(rows_rec).sort_values('Coste Acumulado', ascending=False)
 
                     # % peso de cada recurso en el cliente según expedientes (sobre el total del cliente)
                     total_exp = df_rec_cli['Expedientes'].sum()
@@ -946,6 +946,7 @@ elif st.session_state.vista_actual == 'Cliente':
                     cols_rec_display = ['Recurso', 'Expedientes', 'Exp. Totales Recurso', '% s/Total Recurso', '% s/Expedientes', 'Coste Mensual', 'Coste Acumulado']
                     styled_rec = (df_rec_cli[cols_rec_display]
                                   .style.format(fmt_rec)
+                                  .set_properties(subset=['Exp. Totales Recurso'], **{'text-align': 'right'})
                                   .apply(_style_total, axis=1))
                     st.dataframe(styled_rec, use_container_width=True, hide_index=True)
                 else:
