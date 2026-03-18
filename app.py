@@ -824,17 +824,44 @@ elif st.session_state.vista_actual == 'Cliente':
                     unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # --- Pre-cálculo del coste proporcional del equipo para este cliente ---
+        cli_coste_equipo = 0.0
+        if df_carga is not None and col_cli_carga is not None:
+            _lista_cli_tmp = df_carga[col_cli_carga].dropna().unique().tolist()
+            _match_cli_tmp = get_best_match(cliente_sel, _lista_cli_tmp,
+                                            scorer=fuzz.partial_ratio, threshold=70)
+            if _match_cli_tmp:
+                _df_cc_tmp = df_carga[df_carga[col_cli_carga] == _match_cli_tmp]
+                _lista_eq_tmp = df_equipos[col_recurso_eq].dropna().unique().tolist()
+                _cols_acum_tmp = [c for i in range(1, mes_corte) for c in df_equipos.columns if meses_str[i] in c.upper()]
+                _exp_tot_tmp = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
+                for _, _cr in _df_cc_tmp.iterrows():
+                    _rn = _cr[col_rec_carga]
+                    _exp_c = float(_cr[col_exp_carga]) if pd.notna(_cr[col_exp_carga]) else 0.0
+                    _exp_t = _exp_tot_tmp.get(_rn, 0)
+                    _ratio = (_exp_c / _exp_t) if _exp_t > 0 else 0.0
+                    _meq = get_best_match(str(_rn), _lista_eq_tmp)
+                    if _meq:
+                        _eq_r = df_equipos[df_equipos[col_recurso_eq] == _meq].iloc[0]
+                        _acum = float(_eq_r[_cols_acum_tmp].sum()) if _cols_acum_tmp else float(_eq_r['COSTE_MENSUAL']) * meses_transcurridos
+                        cli_coste_equipo += _acum * _ratio
+
         cli_dif_fmt = fmt_eur(abs(cli_dif))
         _dc = "#cc0000" if cli_dif < 0 else "#00b300"
         _da = "↓" if cli_dif < 0 else "↑"
         _dv = f"-{cli_dif_fmt}" if cli_dif < 0 else cli_dif_fmt
 
-        c1, c2, c3, c4 = st.columns(4)
+        cli_peso_pct = (cli_coste_equipo / cli_fact * 100) if cli_fact > 0 else 0.0
+        cli_peso_fmt = f"{cli_peso_pct:.1f}".replace('.', ',')
+
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.markdown(html_metric("Obj. Anual", fmt_eur(cli_obj_anual)), unsafe_allow_html=True)
         c2.markdown(html_metric("Obj. Acumulado", fmt_eur(cli_obj_acum)), unsafe_allow_html=True)
         c3.markdown(html_metric("Fact. Acumulada", fmt_eur(cli_fact),
             f"<p style='font-size:0.8rem;color:{_dc};margin:0;'>{_da} {_dv}</p>"), unsafe_allow_html=True)
-        c4.markdown(html_metric("% Cumplimiento",
+        c4.markdown(html_metric("Coste Equipo (proporcional)", fmt_eur(cli_coste_equipo),
+            badge_peso_equipo(cli_peso_pct, cli_peso_fmt)), unsafe_allow_html=True)
+        c5.markdown(html_metric("% Cumplimiento",
             f"<span style='color:{cli_color};'>{cli_pct_fmt}%</span>"), unsafe_allow_html=True)
 
         st.markdown("---")
@@ -852,51 +879,71 @@ elif st.session_state.vista_actual == 'Cliente':
                 lista_eq_all = df_equipos[col_recurso_eq].dropna().unique().tolist()
                 _cols_acum = [c for i in range(1, mes_corte) for c in df_equipos.columns if meses_str[i] in c.upper()]
 
+                # Expedientes totales por recurso (en todos los clientes) para calcular proporciones
+                exp_totales_por_recurso = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
+
                 rows_rec = []
                 for _, cr in df_carga_cli.iterrows():
                     rec_name = cr[col_rec_carga]
                     exp_cli  = int(cr[col_exp_carga]) if pd.notna(cr[col_exp_carga]) else 0
+
+                    # Proporción: expedientes en este cliente / expedientes totales del recurso
+                    exp_total_rec = exp_totales_por_recurso.get(rec_name, 0)
+                    ratio = (exp_cli / exp_total_rec) if exp_total_rec > 0 else 0.0
+
                     match_eq = get_best_match(str(rec_name), lista_eq_all)
                     if match_eq:
                         eq_row     = df_equipos[df_equipos[col_recurso_eq] == match_eq].iloc[0]
-                        coste_mens = float(eq_row['COSTE_MENSUAL'])
-                        coste_acum = float(eq_row[_cols_acum].sum()) if _cols_acum else coste_mens * meses_transcurridos
+                        coste_mens_total = float(eq_row['COSTE_MENSUAL'])
+                        coste_acum_total = float(eq_row[_cols_acum].sum()) if _cols_acum else coste_mens_total * meses_transcurridos
+                        # Aplicar proporción
+                        coste_mens = coste_mens_total * ratio
+                        coste_acum = coste_acum_total * ratio
                     else:
                         coste_mens = coste_acum = 0.0
                     rows_rec.append({'Recurso': rec_name, 'Expedientes': exp_cli,
+                                     'Exp. Totales Recurso': exp_total_rec,
+                                     '% s/Total Recurso': ratio * 100,
                                      'Coste Mensual': coste_mens, 'Coste Acumulado': coste_acum})
 
                 if rows_rec:
                     df_rec_cli = pd.DataFrame(rows_rec).sort_values('Expedientes', ascending=False)
 
-                    # % peso de cada recurso en el cliente según expedientes
+                    # % peso de cada recurso en el cliente según expedientes (sobre el total del cliente)
                     total_exp = df_rec_cli['Expedientes'].sum()
                     df_rec_cli['% s/Expedientes'] = (
                         df_rec_cli['Expedientes'] / total_exp * 100
                         if total_exp > 0 else 0.0
                     )
 
-                    # Fila de totales
+                    # Fila de totales (la proporción no se suma, se deja en blanco)
                     total_row = {
-                        'Recurso':          'TOTAL',
-                        'Expedientes':      int(df_rec_cli['Expedientes'].sum()),
-                        '% s/Expedientes':  df_rec_cli['% s/Expedientes'].sum(),
-                        'Coste Mensual':    df_rec_cli['Coste Mensual'].sum(),
-                        'Coste Acumulado':  df_rec_cli['Coste Acumulado'].sum(),
+                        'Recurso':               'TOTAL',
+                        'Expedientes':           int(df_rec_cli['Expedientes'].sum()),
+                        'Exp. Totales Recurso':  '',
+                        '% s/Total Recurso':     float('nan'),
+                        '% s/Expedientes':       df_rec_cli['% s/Expedientes'].sum(),
+                        'Coste Mensual':         df_rec_cli['Coste Mensual'].sum(),
+                        'Coste Acumulado':       df_rec_cli['Coste Acumulado'].sum(),
                     }
                     df_rec_cli = pd.concat([df_rec_cli, pd.DataFrame([total_row])], ignore_index=True)
 
-                    fmt_rec = {'Coste Mensual':    lambda x: fmt_eur(x),
-                               'Coste Acumulado':  lambda x: fmt_eur(x),
-                               'Expedientes':      lambda x: f"{int(x):,}".replace(',', '.'),
-                               '% s/Expedientes':  lambda x: f"{x:.1f}%".replace('.', ',')}
+                    fmt_rec = {
+                        'Coste Mensual':       lambda x: fmt_eur(x),
+                        'Coste Acumulado':     lambda x: fmt_eur(x),
+                        'Expedientes':         lambda x: f"{int(x):,}".replace(',', '.'),
+                        'Exp. Totales Recurso': lambda x: f"{int(x):,}".replace(',', '.') if pd.notna(x) and x != '' else '',
+                        '% s/Total Recurso':   lambda x: f"{x:.1f}%".replace('.', ',') if pd.notna(x) else '',
+                        '% s/Expedientes':     lambda x: f"{x:.1f}%".replace('.', ','),
+                    }
 
                     def _style_total(row):
                         if row['Recurso'] == 'TOTAL':
                             return ['font-weight:bold;background-color:#f0f0f0'] * len(row)
                         return [''] * len(row)
 
-                    cols_rec_display = ['Recurso', 'Expedientes', '% s/Expedientes', 'Coste Mensual', 'Coste Acumulado']
+                    st.caption("ℹ️ El **Coste Mensual** y **Coste Acumulado** son proporcionales a los expedientes del recurso en este cliente respecto a su total de expedientes (columna *% s/Total Recurso*).")
+                    cols_rec_display = ['Recurso', 'Expedientes', 'Exp. Totales Recurso', '% s/Total Recurso', '% s/Expedientes', 'Coste Mensual', 'Coste Acumulado']
                     styled_rec = (df_rec_cli[cols_rec_display]
                                   .style.format(fmt_rec)
                                   .apply(_style_total, axis=1))
