@@ -854,15 +854,13 @@ elif st.session_state.vista_actual == 'Cliente':
         cli_peso_pct = (cli_coste_equipo / cli_fact * 100) if cli_fact > 0 else 0.0
         cli_peso_fmt = f"{cli_peso_pct:.1f}".replace('.', ',')
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         c1.markdown(html_metric("Obj. Anual", fmt_eur(cli_obj_anual)), unsafe_allow_html=True)
         c2.markdown(html_metric("Obj. Acumulado", fmt_eur(cli_obj_acum)), unsafe_allow_html=True)
         c3.markdown(html_metric("Fact. Acumulada", fmt_eur(cli_fact),
             f"<p style='font-size:0.8rem;color:{_dc};margin:0;'>{_da} {_dv}</p>"), unsafe_allow_html=True)
         c4.markdown(html_metric("Coste Equipo (proporcional)", fmt_eur(cli_coste_equipo),
             badge_peso_equipo(cli_peso_pct, cli_peso_fmt)), unsafe_allow_html=True)
-        c5.markdown(html_metric("% Cumplimiento",
-            f"<span style='color:{cli_color};'>{cli_pct_fmt}%</span>"), unsafe_allow_html=True)
 
         st.markdown("---")
         st.subheader("👥 Recursos relacionados con este cliente")
