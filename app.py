@@ -79,8 +79,15 @@ def _check_login_db(usuario, password):
         )
         conn = pyodbc.connect(conn_str)
         cursor = conn.cursor()
-        # CDM_Usuarios: ID, UsuarioID, Contraseña
-        query = "SELECT TOP 1 ID FROM CDM_Usuarios WHERE UsuarioID = ? AND Contraseña = ?"
+        # Primero comprobamos qué columnas tiene la tabla
+        cursor.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CDM_Usuarios'")
+        cols = [r[0] for r in cursor.fetchall()]
+        # Buscamos la columna de contraseña por aproximación (por si la ñ da problemas)
+        col_pass = next((c for c in cols if 'ontra' in c), None)
+        if col_pass is None:
+            conn.close()
+            return False, f"No se encontró columna de contraseña. Columnas: {cols}"
+        query = f"SELECT TOP 1 ID FROM CDM_Usuarios WHERE UsuarioID = ? AND [{col_pass}] = ?"
         cursor.execute(query, (usuario, password))
         row = cursor.fetchone()
         conn.close()
