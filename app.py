@@ -69,9 +69,43 @@ st.set_page_config(page_title="Acuerdo Servicios Jurídicos", page_icon=_page_ic
 # ================================
 # AUTENTICACIÓN
 # ================================
+def _check_login_db(usuario, password):
+    """Valida las credenciales contra la tabla CDM_Usuarios de la base de datos."""
+    if not _PYODBC_OK:
+        return False, "pyodbc no instalado"
+    try:
+        cfg = st.secrets.get("sqlserver", {})
+        conn_str = (
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={cfg.get('server', '')};"
+            f"DATABASE={cfg.get('database', '')};"
+            f"UID={cfg.get('username', '')};"
+            f"PWD={cfg.get('password', '')};"
+        )
+        # Timeout corto para no bloquear la UI si la BD no responde
+        conn = pyodbc.connect(conn_str, timeout=5)
+        cursor = conn.cursor()
+        # CDM_Usuarios: ID, UsuarioID, Contraseña
+        query = "SELECT TOP 1 ID FROM CDM_Usuarios WHERE UsuarioID = ? AND Contraseña = ?"
+        cursor.execute(query, (usuario, password))
+        row = cursor.fetchone()
+        conn.close()
+        return (row is not None), None
+    except Exception as e:
+        return False, str(e)
+
 def _check_login(usuario, password):
-    usuarios = st.secrets.get("usuarios", {})
-    return usuarios.get(usuario) == password
+    # 1. Intentar validar contra base de datos
+    success, err = _check_login_db(usuario, password)
+    if success:
+        return True, None
+    
+    # 2. Fallback a secrets.toml (para usuarios administradores o emergencia)
+    usuarios_secrets = st.secrets.get("usuarios", {})
+    if usuarios_secrets.get(usuario) == password:
+        return True, None
+    
+    return False, err
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -86,11 +120,15 @@ if not st.session_state.logged_in:
         usuario_input  = st.text_input("Usuario")
         password_input = st.text_input("Contraseña", type="password")
         if st.button("Entrar", use_container_width=True, type="primary"):
-            if _check_login(usuario_input, password_input):
+            is_ok, login_err = _check_login(usuario_input, password_input)
+            if is_ok:
                 st.session_state.logged_in = True
                 st.rerun()
             else:
-                st.error("Usuario o contraseña incorrectos.")
+                if login_err:
+                    st.error(f"Error de conexión a la base de datos: {login_err}")
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
 # Header con logo
