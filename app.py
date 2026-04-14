@@ -13,9 +13,9 @@ try:
 except ImportError:
     _PYODBC_OK = False
 
-@st.cache_data(ttl=300, show_spinner=False)
 def cargar_carga_desde_sql():
-    """Carga los datos de Carga de Trabajo directamente desde SQL Server.
+    """Carga los datos de Carga de Trabajo desde SQL Server.
+    Se llama una sola vez por sesión y el resultado se guarda en session_state.
     Devuelve (DataFrame, None) si tiene éxito, o (None, mensaje_error) si falla."""
     if not _PYODBC_OK:
         return None, "pyodbc no instalado"
@@ -27,23 +27,17 @@ def cargar_carga_desde_sql():
             f"DATABASE={cfg.get('database', '')};"
             f"UID={cfg.get('username', '')};"
             f"PWD={cfg.get('password', '')};"
+            f"Connection Timeout=30;"
         )
-        conn = pyodbc.connect(conn_str, timeout=10)
+        conn = pyodbc.connect(conn_str)
         query = """
-            select dsgestor_colaborador as Recurso,
-                   dsentidad_deuda     as Cliente,
-                   COUNT(*)            as expedientes
-            from ACUE_GESTORES_COLABORADORES
-            inner join ACUE_OPERACION_DEUDA
-                on ACUE_OPERACION_DEUDA.CDGESTOR_COLABORADOR = ACUE_GESTORES_COLABORADORES.CDGESTOR_COLABORADOR
-            inner join ACUE_ENTIDAD_DEUDA_SERVICIO
-                on ACUE_ENTIDAD_DEUDA_SERVICIO.ID = ACUE_OPERACION_DEUDA.ID_Cartera
-            inner join ACUE_ENTIDAD_DEUDA
-                on ACUE_ENTIDAD_DEUDA.CDENTIDAD_DEUDA = ACUE_ENTIDAD_DEUDA_SERVICIO.CDENTIDAD_DEUDA
-            inner join ACUE_TIPO_ACTUALIZACION
-                on ACUE_TIPO_ACTUALIZACION.CDTIPO_ACTUALIZACION = ACUE_OPERACION_DEUDA.CDTIPO_ACTUALIZACION
-                and ITFUERA_GESTION = 0
-            group by DSGESTOR_COLABORADOR, DSENTIDAD_DEUDA
+            select Gestor   as RECURSO,
+                   Entidad  as CLIENTE,
+                   COUNT(*) as OPERACIONES
+            from acue_view_operaciones
+            where ITINTERVINIENTE_PRINCIPAL = 'S'
+              and ITFUERA_GESTION = 0
+            group by Entidad, Gestor
         """
         df = pd.read_sql(query, conn)
         conn.close()
@@ -81,9 +75,9 @@ def _check_login_db(usuario, password):
             f"DATABASE={cfg.get('database', '')};"
             f"UID={cfg.get('username', '')};"
             f"PWD={cfg.get('password', '')};"
+            f"Connection Timeout=30;"
         )
-        # Timeout corto para no bloquear la UI si la BD no responde
-        conn = pyodbc.connect(conn_str, timeout=5)
+        conn = pyodbc.connect(conn_str)
         cursor = conn.cursor()
         # CDM_Usuarios: ID, UsuarioID, Contraseña
         query = "SELECT TOP 1 ID FROM CDM_Usuarios WHERE UsuarioID = ? AND Contraseña = ?"
@@ -157,9 +151,22 @@ st.markdown(f"""
 # BARRA LATERAL (SIDEBAR)
 # ================================
 st.sidebar.header("📁 1. Cargar Archivos Excel")
-obj_file = st.sidebar.file_uploader("Subir Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
+
+_ruta_red = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppCuadroDeMandos"
+_obj_red  = _os.path.join(_ruta_red, "OBJETIVOSyEQUIPOS.xlsx")
+_fact_red = _os.path.join(_ruta_red, "FACTURAS ASJ de 2019 a 2026.xlsx")
+_obj_encontrado  = _os.path.exists(_obj_red)
+_fact_encontrado = _os.path.exists(_fact_red)
+
+st.sidebar.markdown("**📂 Ficheros en red:**")
+st.sidebar.markdown(
+    f"{'✅' if _obj_encontrado  else '❌'} OBJETIVOSyEQUIPOS.xlsx\n\n"
+    f"{'✅' if _fact_encontrado else '❌'} FACTURAS ASJ...xlsx"
+)
+st.sidebar.markdown("*Sube manualmente si no se detectan:*")
+obj_file  = st.sidebar.file_uploader("Subir Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
 fact_file = st.sidebar.file_uploader("Subir Excel de FACTURAS", type=['xlsx', 'xls'])
-# Carga de Trabajo se lee siempre desde SQL Server (sin uploader)
+# Carga de Trabajo se obtiene de la base de datos
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 2. Configuración")
@@ -239,8 +246,8 @@ def html_metric(label, value, sub_html=""):
 # ================================
 import os
 
-ruta_obj_defecto   = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppObjetivos\OBJETIVOSyEQUIPOS.xlsx"
-ruta_fact_defecto  = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppObjetivos\FACTURAS ASJ de 2019 a 2026.xlsx"
+ruta_obj_defecto   = _obj_red
+ruta_fact_defecto  = _fact_red
 
 usar_rutas_defecto = not obj_file and not fact_file and os.path.exists(ruta_obj_defecto) and os.path.exists(ruta_fact_defecto)
 
@@ -393,19 +400,26 @@ with st.spinner("Procesando y cruzando datos..."):
         df_carga = None
         col_rec_carga = col_exp_carga = col_cli_carga = None
 
-        # --- Carga de Trabajo: Siempre desde SQL Server ---
-        _df_sql_carga, _sql_err = cargar_carga_desde_sql()
+        # --- Carga de Trabajo: desde SQL Server, una sola vez por sesión ---
+        if 'df_carga_sesion' not in st.session_state:
+            _df_sql_carga, _sql_err = cargar_carga_desde_sql()
+            st.session_state['df_carga_sesion'] = _df_sql_carga
+            st.session_state['df_carga_err']    = _sql_err
+        else:
+            _df_sql_carga = st.session_state['df_carga_sesion']
+            _sql_err      = st.session_state['df_carga_err']
+
+        col_rec_carga = 'RECURSO'
+        col_cli_carga = 'CLIENTE'
+        col_exp_carga = 'OPERACIONES'
 
         if _df_sql_carga is not None and not _df_sql_carga.empty:
             df_carga = _df_sql_carga.copy()
-            col_rec_carga = 'Recurso'
-            col_cli_carga = 'Cliente'
-            col_exp_carga = 'expedientes'
             df_carga[col_exp_carga] = pd.to_numeric(df_carga[col_exp_carga], errors='coerce').fillna(0)
-            st.sidebar.caption(f"🟢 Carga de trabajo: BD SQL ({len(df_carga)} registros)")
+            st.sidebar.caption(f"🟢 Carga de trabajo: {len(df_carga)} registros")
         else:
             if _sql_err:
-                st.sidebar.caption(f"⚠️ BD no disponible: {_sql_err[:60]}")
+                st.sidebar.caption(f"⚠️ Carga de trabajo no disponible: {_sql_err[:60]}")
 
         if df_carga is not None:
             lista_recursos_carga = df_carga[col_rec_carga].dropna().unique().tolist()
@@ -880,12 +894,12 @@ elif st.session_state.vista_actual == 'Anomalias':
     st.markdown("---")
     n4 = len(recursos_sin_carga)
     st.subheader(f"📋 Recursos sin datos en Carga de Trabajo ({n4})")
-    if not archivo_carga_a_leer:
-        st.info("No se ha cargado el Excel de Carga de Trabajo.")
+    if df_carga is None:
+        st.info("No hay datos de Carga de Trabajo disponibles (error de conexión a la BD).")
     elif n4 == 0:
         st.success("Todos los recursos tienen datos de carga de trabajo. ✅")
     else:
-        st.warning(f"{n4} recursos del equipo no se encontraron en el Excel de Carga de Trabajo (fuzzy matching < 80%). Su número de expedientes aparecerá como 0.")
+        st.warning(f"{n4} recursos del equipo no se encontraron en la Carga de Trabajo (fuzzy matching < 80%). Su número de operaciones aparecerá como 0.")
         st.dataframe(pd.DataFrame({'Recurso': recursos_sin_carga}), use_container_width=True, hide_index=True)
 
 elif st.session_state.vista_actual == 'Cliente':
