@@ -4,3 +4,4 @@ openpyxl
 plotly
 thefuzz
 python-Levenshtein
+pyodbc

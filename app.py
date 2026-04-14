@@ -7,10 +7,64 @@ import io
 import base64
 import os as _os
 
+try:
+    import pyodbc
+    _PYODBC_OK = True
+except ImportError:
+    _PYODBC_OK = False
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cargar_carga_desde_sql():
+    """Carga los datos de Carga de Trabajo directamente desde SQL Server.
+    Devuelve (DataFrame, None) si tiene éxito, o (None, mensaje_error) si falla."""
+    if not _PYODBC_OK:
+        return None, "pyodbc no instalado"
+    try:
+        cfg = st.secrets.get("sqlserver", {})
+        conn_str = (
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={cfg.get('server', '')};"
+            f"DATABASE={cfg.get('database', '')};"
+            f"UID={cfg.get('username', '')};"
+            f"PWD={cfg.get('password', '')};"
+        )
+        conn = pyodbc.connect(conn_str, timeout=10)
+        query = """
+            select dsgestor_colaborador as Recurso,
+                   dsentidad_deuda     as Cliente,
+                   COUNT(*)            as expedientes
+            from ACUE_GESTORES_COLABORADORES
+            inner join ACUE_OPERACION_DEUDA
+                on ACUE_OPERACION_DEUDA.CDGESTOR_COLABORADOR = ACUE_GESTORES_COLABORADORES.CDGESTOR_COLABORADOR
+            inner join ACUE_ENTIDAD_DEUDA_SERVICIO
+                on ACUE_ENTIDAD_DEUDA_SERVICIO.ID = ACUE_OPERACION_DEUDA.ID_Cartera
+            inner join ACUE_ENTIDAD_DEUDA
+                on ACUE_ENTIDAD_DEUDA.CDENTIDAD_DEUDA = ACUE_ENTIDAD_DEUDA_SERVICIO.CDENTIDAD_DEUDA
+            inner join ACUE_TIPO_ACTUALIZACION
+                on ACUE_TIPO_ACTUALIZACION.CDTIPO_ACTUALIZACION = ACUE_OPERACION_DEUDA.CDTIPO_ACTUALIZACION
+                and ITFUERA_GESTION = 0
+            group by DSGESTOR_COLABORADOR, DSENTIDAD_DEUDA
+        """
+        df = pd.read_sql(query, conn)
+        conn.close()
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
 # ================================
 # CONFIGURACIÓN DE PÁGINA
 # ================================
-st.set_page_config(page_title="Acuerdo Servicios Jurídicos", page_icon="⚖️", layout="wide")
+_login_logo_path = _os.path.join(_os.path.dirname(__file__), "logo-login.png")
+try:
+    with open(_login_logo_path, "rb") as _f:
+        _login_logo_b64 = base64.b64encode(_f.read()).decode()
+    _login_logo_html = f"<img src='data:image/png;base64,{_login_logo_b64}' style='height:80px;margin-bottom:20px;'/>"
+    _page_icon = f"data:image/png;base64,{_login_logo_b64}"
+except Exception:
+    _login_logo_html = "### ⚖️ Acuerdo"
+    _page_icon = "⚖️"
+
+st.set_page_config(page_title="Acuerdo Servicios Jurídicos", page_icon=_page_icon, layout="wide")
 
 # ================================
 # AUTENTICACIÓN
@@ -26,7 +80,8 @@ if not st.session_state.logged_in:
     st.markdown("<br><br>", unsafe_allow_html=True)
     col_login, _ = st.columns([1, 2])
     with col_login:
-        st.markdown("### ⚖️ Acuerdo Servicios Jurídicos")
+        st.markdown(_login_logo_html, unsafe_allow_html=True)
+        st.markdown("### Acuerdo Servicios Jurídicos")
         st.markdown("Introduce tus credenciales para acceder.")
         usuario_input  = st.text_input("Usuario")
         password_input = st.text_input("Contraseña", type="password")
@@ -66,7 +121,7 @@ st.markdown(f"""
 st.sidebar.header("📁 1. Cargar Archivos Excel")
 obj_file = st.sidebar.file_uploader("Subir Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
 fact_file = st.sidebar.file_uploader("Subir Excel de FACTURAS", type=['xlsx', 'xls'])
-carga_file = st.sidebar.file_uploader("Subir Excel de CARGA DE TRABAJO", type=['xlsx', 'xls'])
+# Carga de Trabajo se lee siempre desde SQL Server (sin uploader)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 2. Configuración")
@@ -146,16 +201,14 @@ def html_metric(label, value, sub_html=""):
 # ================================
 import os
 
-ruta_obj_defecto   = r"c:\q\OBJETIVOSyEQUIPOS.xlsx"
-ruta_fact_defecto  = r"c:\q\FACTURAS ASJ de 2019 a 2026.xlsx"
-ruta_carga_defecto = r"c:\q\cargatrabajo.xlsx"
+ruta_obj_defecto   = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppObjetivos\OBJETIVOSyEQUIPOS.xlsx"
+ruta_fact_defecto  = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppObjetivos\FACTURAS ASJ de 2019 a 2026.xlsx"
 
 usar_rutas_defecto = not obj_file and not fact_file and os.path.exists(ruta_obj_defecto) and os.path.exists(ruta_fact_defecto)
 
 # Asignar a las variables a usar
 archivo_obj_a_leer   = obj_file   if obj_file   else (ruta_obj_defecto   if usar_rutas_defecto else None)
 archivo_fact_a_leer  = fact_file  if fact_file  else (ruta_fact_defecto  if usar_rutas_defecto else None)
-archivo_carga_a_leer = carga_file if carga_file else (ruta_carga_defecto if os.path.exists(ruta_carga_defecto) else None)
 
 if archivo_obj_a_leer and archivo_fact_a_leer:
     try:
@@ -302,27 +355,29 @@ with st.spinner("Procesando y cruzando datos..."):
         df_carga = None
         col_rec_carga = col_exp_carga = col_cli_carga = None
 
-        if archivo_carga_a_leer:
-            try:
-                df_carga = pd.read_excel(archivo_carga_a_leer)
-                df_carga.columns = df_carga.columns.astype(str).str.strip()
-                col_rec_carga = df_carga.columns[0]   # 'Recusro' (o similar)
-                col_cli_carga = df_carga.columns[1]   # 'Cliente'
-                col_exp_carga = df_carga.columns[2]   # 'Expedientes'
-                df_carga[col_exp_carga] = pd.to_numeric(df_carga[col_exp_carga], errors='coerce').fillna(0)
-                lista_recursos_carga = df_carga[col_rec_carga].dropna().unique().tolist()
+        # --- Carga de Trabajo: Siempre desde SQL Server ---
+        _df_sql_carga, _sql_err = cargar_carga_desde_sql()
 
-                # Agrupar expedientes totales por recurso
-                exp_por_recurso_carga = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
+        if _df_sql_carga is not None and not _df_sql_carga.empty:
+            df_carga = _df_sql_carga.copy()
+            col_rec_carga = 'Recurso'
+            col_cli_carga = 'Cliente'
+            col_exp_carga = 'expedientes'
+            df_carga[col_exp_carga] = pd.to_numeric(df_carga[col_exp_carga], errors='coerce').fillna(0)
+            st.sidebar.caption(f"🟢 Carga de trabajo: BD SQL ({len(df_carga)} registros)")
+        else:
+            if _sql_err:
+                st.sidebar.caption(f"⚠️ BD no disponible: {_sql_err[:60]}")
 
-                for rec in lista_recursos_eq:
-                    match = get_best_match(str(rec), lista_recursos_carga)
-                    if match:
-                        dict_expedientes[rec] = int(exp_por_recurso_carga.get(match, 0))
-                    else:
-                        recursos_sin_carga.append(rec)
-            except Exception as _e_carga:
-                st.warning(f"No se pudo leer el Excel de Carga de Trabajo: {_e_carga}")
+        if df_carga is not None:
+            lista_recursos_carga = df_carga[col_rec_carga].dropna().unique().tolist()
+            exp_por_recurso_carga = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
+            for rec in lista_recursos_eq:
+                match = get_best_match(str(rec), lista_recursos_carga)
+                if match:
+                    dict_expedientes[rec] = int(exp_por_recurso_carga.get(match, 0))
+                else:
+                    recursos_sin_carga.append(rec)
         else:
             recursos_sin_carga = list(lista_recursos_eq)
 
