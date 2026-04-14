@@ -118,6 +118,7 @@ if not st.session_state.logged_in:
         st.markdown(_login_logo_html, unsafe_allow_html=True)
         st.markdown("### Acuerdo Servicios Jurídicos")
         st.markdown("Introduce tus credenciales para acceder.")
+        st.caption("v2025-04-14 17:30")
         usuario_input  = st.text_input("Usuario")
         password_input = st.text_input("Contraseña", type="password")
         if st.button("Entrar", use_container_width=True, type="primary"):
