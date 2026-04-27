@@ -31,16 +31,25 @@ def cargar_carga_desde_sql():
         )
         conn = pyodbc.connect(conn_str)
         query = """
-            select Gestor   as RECURSO,
-                   Entidad  as CLIENTE,
-                   COUNT(*) as OPERACIONES
-            from acue_view_operaciones
-            where ITINTERVINIENTE_PRINCIPAL = 'S'
-              and ITFUERA_GESTION = 0
-            group by Entidad, Gestor
+            select DSGESTOR_COLABORADOR              as RECURSO,
+                   DSENTIDAD_DEUDA                   as CLIENTE,
+                   fcsaldo                           as FECHA,
+                   sum(NMOPERACIONES)                as OPERACIONES
+            from ACUE_SALDO
+            inner join ACUE_GESTORES_COLABORADORES
+                on ACUE_GESTORES_COLABORADORES.CDGESTOR_COLABORADOR = ACUE_SALDO.CDGESTOR_COLABORADOR
+            inner join ACUE_ENTIDAD_DEUDA_SERVICIO
+                on ACUE_ENTIDAD_DEUDA_SERVICIO.id = ACUE_SALDO.ID_Cartera
+            inner join ACUE_ENTIDAD_DEUDA
+                on ACUE_ENTIDAD_DEUDA_SERVICIO.CDENTIDAD_DEUDA = ACUE_ENTIDAD_DEUDA.CDENTIDAD_DEUDA
+            where ACUE_SALDO.FCSALDO >= DATEADD(day, -366, GETDATE())
+              and ACUE_GESTORES_COLABORADORES.CDGESTOR_COLABORADOR <> 408
+              and ACUE_ENTIDAD_DEUDA.CDENTIDAD_DEUDA <> 2006
+            group by DSGESTOR_COLABORADOR, DSENTIDAD_DEUDA, fcsaldo
         """
         df = pd.read_sql(query, conn)
         conn.close()
+        df['FECHA'] = pd.to_datetime(df['FECHA'])
         return df, None
     except Exception as e:
         return None, str(e)
@@ -158,8 +167,46 @@ st.markdown(f"""
 # ================================
 # BARRA LATERAL (SIDEBAR)
 # ================================
-st.sidebar.header("📁 1. Cargar Archivos Excel")
 
+# CSS: píldoras seleccionadas en verde
+st.markdown("""
+<style>
+div[data-testid="stPills"] button[aria-selected="true"],
+div[data-testid="stPills"] button[data-selected="true"],
+div[data-testid="stPills"] [aria-selected="true"] {
+    background-color: #00b300 !important;
+    border-color: #00b300 !important;
+    color: white !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Selector de meses (arriba del todo) ---
+_meses_nombres = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+_mes_hoy = datetime.datetime.now().month
+_defecto = _meses_nombres[:_mes_hoy - 1]  # meses completados por defecto
+
+st.sidebar.markdown("**📅 Meses a analizar**")
+meses_seleccionados_nombres = st.sidebar.pills(
+    "Meses",
+    options=_meses_nombres,
+    selection_mode="multi",
+    default=_defecto,
+    label_visibility="collapsed"
+)
+
+meses_seleccionados = sorted([_meses_nombres.index(m) + 1 for m in meses_seleccionados_nombres]) if meses_seleccionados_nombres else []
+meses_transcurridos = len(meses_seleccionados)
+mes_corte = (max(meses_seleccionados) + 1) if meses_seleccionados else _mes_hoy
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Configuración")
+año_analisis = st.sidebar.number_input("Año de Análisis", min_value=2000, max_value=2100, value=2026)
+divisor_meses = st.sidebar.number_input("Divisor de Presupuesto Anual (Facturación)", min_value=1, max_value=12, value=12, help="Se usa para calcular el objetivo de facturación mensual. Usualmente 12, pero se puede bajar a 11 para amortiguar vacaciones.")
+
+st.sidebar.markdown("---")
+
+# --- Ficheros en red ---
 _ruta_red = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppCuadroDeMandos"
 _obj_red  = _os.path.join(_ruta_red, "OBJETIVOSyEQUIPOS.xlsx")
 _fact_red = _os.path.join(_ruta_red, "FACTURAS ASJ de 2019 a 2026.xlsx")
@@ -171,19 +218,10 @@ st.sidebar.markdown(
     f"{'✅' if _obj_encontrado  else '❌'} OBJETIVOSyEQUIPOS.xlsx\n\n"
     f"{'✅' if _fact_encontrado else '❌'} FACTURAS ASJ...xlsx"
 )
-st.sidebar.markdown("*Sube manualmente si no se detectan:*")
-obj_file  = st.sidebar.file_uploader("Subir Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
-fact_file = st.sidebar.file_uploader("Subir Excel de FACTURAS", type=['xlsx', 'xls'])
-# Carga de Trabajo se obtiene de la base de datos
-
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ 2. Configuración")
-año_analisis = st.sidebar.number_input("Año de Análisis", min_value=2000, max_value=2100, value=2026)
-
-divisor_meses = st.sidebar.number_input("Divisor de Presupuesto Anual (Facturación)", min_value=1, max_value=12, value=12, help="Se usa para calcular el objetivo de facturación mensual. Usualmente 12, pero se puede bajar a 11 para amortiguar vacaciones.")
-
-mes_actual_sugerido = datetime.datetime.now().month
-mes_corte = st.sidebar.slider("Mes actual (para objetivo acumulado y coste recursos)", min_value=1, max_value=12, value=mes_actual_sugerido)
+with st.sidebar.expander("📤 Cargar ficheros manualmente"):
+    st.caption("Usa esto solo si los ficheros en red no están disponibles.")
+    obj_file  = st.file_uploader("Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
+    fact_file = st.file_uploader("Excel de FACTURAS", type=['xlsx', 'xls'])
 
 st.sidebar.markdown("---")
 
@@ -315,6 +353,11 @@ with st.spinner("Procesando y cruzando datos..."):
         df_facturas = df_facturas[~df_facturas[col_serie_fact].astype(str).str.strip().str.upper().isin(['SUP', 'WIP'])]
         df_facturas[col_fecha_fact] = pd.to_datetime(df_facturas[col_fecha_fact], errors='coerce')
         df_facturas = df_facturas.dropna(subset=[col_fecha_fact])
+        # Solo facturas de los meses seleccionados y del año de análisis
+        df_facturas = df_facturas[
+            (df_facturas[col_fecha_fact].dt.year == año_analisis) &
+            (df_facturas[col_fecha_fact].dt.month.isin(meses_seleccionados))
+        ]
         
         # Fuzzy matching con F y G
         def match_cliente(row):
@@ -354,8 +397,6 @@ with st.spinner("Procesando y cruzando datos..."):
                     df_clientes.loc[df_clientes[col_cliente_obj] == cliente, col_nombre] += row[col_base_fact]
                 
         # 4. RATIOS y FACTURACIÓN ACUMULADA CLIENTES (PARA DASHBOARD)
-        # Meses computados: siempre mes_corte - 1 (meses completos transcurridos), independiente de facturas
-        meses_transcurridos = max(mes_corte - 1, 0)
         df_clientes['Meses Computados'] = meses_transcurridos
 
         # Facturación Acumulada: suma de todos los meses en el dataframe de clientes
@@ -386,18 +427,14 @@ with st.spinner("Procesando y cruzando datos..."):
         # Coste mensual = Anual / 12
         df_equipos['COSTE_MENSUAL'] = df_equipos[col_presupuesto_eq] / 12.0
         
-        # Asegurar que los meses pasados sean numéricos (se leen del Excel tal cual, sin sobreescribir)
-        for i in range(1, mes_corte):
+        # Meses seleccionados → numérico; resto → None
+        for i in range(1, 13):
             matched_cols = [c for c in df_equipos.columns if meses_str[i] in c.upper()]
             if matched_cols:
-                df_equipos[matched_cols[0]] = pd.to_numeric(df_equipos[matched_cols[0]], errors='coerce').fillna(0)
-                
-        for i in range(mes_corte, 13):
-            mes_nombre = meses_str[i]
-            matched_cols = [c for c in df_equipos.columns if mes_nombre in c.upper()]
-            if matched_cols:
-                col_nombre = matched_cols[0]
-                df_equipos[col_nombre] = None
+                if i in meses_seleccionados:
+                    df_equipos[matched_cols[0]] = pd.to_numeric(df_equipos[matched_cols[0]], errors='coerce').fillna(0)
+                else:
+                    df_equipos[matched_cols[0]] = None
 
         # ================================
         # CARGA DE TRABAJO
@@ -422,9 +459,21 @@ with st.spinner("Procesando y cruzando datos..."):
         col_exp_carga = 'OPERACIONES'
 
         if _df_sql_carga is not None and not _df_sql_carga.empty:
-            df_carga = _df_sql_carga.copy()
-            df_carga[col_exp_carga] = pd.to_numeric(df_carga[col_exp_carga], errors='coerce').fillna(0)
-            st.sidebar.caption(f"🟢 Carga de trabajo: {len(df_carga)} registros")
+            # Filtrar por año y meses seleccionados, luego calcular media por recurso+cliente
+            _df_periodo = _df_sql_carga[
+                (_df_sql_carga['FECHA'].dt.year == año_analisis) &
+                (_df_sql_carga['FECHA'].dt.month.isin(meses_seleccionados))
+            ] if meses_seleccionados else _df_sql_carga.iloc[0:0]
+
+            # Media de operaciones diarias por recurso+cliente en el período
+            df_carga = (
+                _df_periodo.groupby([col_rec_carga, col_cli_carga])['OPERACIONES']
+                .mean()
+                .reset_index()
+            )
+            df_carga['OPERACIONES'] = df_carga['OPERACIONES'].round(1)
+            n_fechas = _df_periodo['FECHA'].nunique()
+            st.sidebar.caption(f"🟢 Carga de trabajo: media sobre {n_fechas} días")
         else:
             if _sql_err:
                 st.sidebar.caption(f"⚠️ Carga de trabajo no disponible: {_sql_err[:60]}")
@@ -435,7 +484,7 @@ with st.spinner("Procesando y cruzando datos..."):
             for rec in lista_recursos_eq:
                 match = get_best_match(str(rec), lista_recursos_carga)
                 if match:
-                    dict_expedientes[rec] = int(exp_por_recurso_carga.get(match, 0))
+                    dict_expedientes[rec] = int(round(exp_por_recurso_carga.get(match, 0)))
                 else:
                     recursos_sin_carga.append(rec)
         else:
@@ -466,31 +515,7 @@ with st.spinner("Procesando y cruzando datos..."):
         ][[col_cliente_obj, col_presupuesto_obj]].copy()
         df_anom_clientes.columns = ['Cliente', 'Presupuesto Anual']
 
-        st.success("✅ ¡Datos procesados correctamente!")
         
-        # ================================
-        # EXPORTACIÓN DE EXCEL
-        # ================================
-        # Generar Excel final en memoria
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Seleccionar y reordenar columnas tal como venían (excepto las de cálculo visual)
-            # Volcamos las calculadas a las pestañas
-            cols_clientes_export = list(df_clientes.columns[:len(df_clientes.columns)-4]) # Quitar calculadas visuales
-            df_clientes[cols_clientes_export].to_excel(writer, sheet_name='CLIENTES_ACTUALIZADO', index=False)
-            
-            cols_equipos_export = [c for c in df_equipos.columns if c != 'COSTE_MENSUAL']
-            df_equipos[cols_equipos_export].to_excel(writer, sheet_name='EQUIPOS_ACTUALIZADO', index=False)
-            
-        output.seek(0)
-        
-        st.download_button(
-            label="📥 Descargar Excel Actualizado",
-            data=output,
-            file_name=f"OBJETIVOS_Y_EQUIPOS_ACTUALIZADO_{año_analisis}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
         
     except Exception as e:
         st.error(f"Error procesando los datos: {e}")
@@ -518,7 +543,8 @@ if st.sidebar.button(f"⚠️ Anomalías{_badge}", use_container_width=True):
     st.session_state.vista_actual = 'Anomalias'
     st.rerun()
 
-st.header(f"📈 Resultados (hasta {meses_str[mes_corte]} {año_analisis})")
+_meses_label = ", ".join([_meses_nombres[m - 1] for m in meses_seleccionados]) if meses_seleccionados else "ningún mes seleccionado"
+st.markdown(f"## 📈 Análisis {_meses_label} {año_analisis}")
 
 # Limpiar responsables nulos o vacíos
 lista_todos_resp = df_clientes[(df_clientes[col_responsable_obj].notna()) & (df_clientes[col_responsable_obj] != "")][col_responsable_obj].unique().tolist()
@@ -535,7 +561,7 @@ if st.session_state.vista_actual == 'Global':
     g_diferencia = g_total_fact - g_total_obj_acumulado
     
     # Coste Equipos global
-    _cols_eq_g = [c for i in range(1, mes_corte) for c in df_equipos.columns if meses_str[i] in c.upper()]
+    _cols_eq_g = [c for i in meses_seleccionados for c in df_equipos.columns if meses_str[i] in c.upper()]
     g_coste_total_equipos = df_equipos[_cols_eq_g].sum().sum() if _cols_eq_g else 0.0
     
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -676,7 +702,7 @@ elif st.session_state.vista_actual == 'Detalle':
     # Coste Equipos del responsable
     df_equipos_resp = df_equipos[df_equipos['RESPONSABLE'] == resp]
     # Coste acumulado = recursos * coste_mensual * (mes_corte - 1)
-    _cols_eq_r = [c for i in range(1, mes_corte) for c in df_equipos_resp.columns if meses_str[i] in c.upper()]
+    _cols_eq_r = [c for i in meses_seleccionados for c in df_equipos_resp.columns if meses_str[i] in c.upper()]
     coste_total_equipos = df_equipos_resp[_cols_eq_r].sum().sum() if _cols_eq_r else 0.0
     
     beneficio_bruto = total_fact - coste_total_equipos
@@ -809,9 +835,9 @@ elif st.session_state.vista_actual == 'Detalle':
             col_recurso_eq = df_equipos_resp.columns[0]
             col_ppto_eq_name = df_equipos_resp.columns[1]
 
-            # Columnas de meses transcurridos (hasta mes anterior)
+            # Columnas de meses seleccionados
             cols_meses_eq = []
-            for i in range(1, mes_corte):
+            for i in meses_seleccionados:
                 matched = [c for c in df_equipos_resp.columns if meses_str[i] in c.upper()]
                 if matched:
                     cols_meses_eq.append(matched[0])
@@ -948,7 +974,7 @@ elif st.session_state.vista_actual == 'Cliente':
             if _match_cli_tmp:
                 _df_cc_tmp = df_carga[df_carga[col_cli_carga] == _match_cli_tmp]
                 _lista_eq_tmp = df_equipos[col_recurso_eq].dropna().unique().tolist()
-                _cols_acum_tmp = [c for i in range(1, mes_corte) for c in df_equipos.columns if meses_str[i] in c.upper()]
+                _cols_acum_tmp = [c for i in meses_seleccionados for c in df_equipos.columns if meses_str[i] in c.upper()]
                 _exp_tot_tmp = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
                 for _, _cr in _df_cc_tmp.iterrows():
                     _rn = _cr[col_rec_carga]
@@ -990,7 +1016,7 @@ elif st.session_state.vista_actual == 'Cliente':
             if match_cli_carga:
                 df_carga_cli = df_carga[df_carga[col_cli_carga] == match_cli_carga]
                 lista_eq_all = df_equipos[col_recurso_eq].dropna().unique().tolist()
-                _cols_acum = [c for i in range(1, mes_corte) for c in df_equipos.columns if meses_str[i] in c.upper()]
+                _cols_acum = [c for i in meses_seleccionados for c in df_equipos.columns if meses_str[i] in c.upper()]
 
                 # Expedientes totales por recurso (en todos los clientes) para calcular proporciones
                 exp_totales_por_recurso = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
@@ -1063,7 +1089,8 @@ elif st.session_state.vista_actual == 'Cliente':
                     st.caption("ℹ️ El **Coste Mensual** y **Coste Acumulado** son proporcionales a los expedientes del recurso en este cliente respecto a su total de expedientes (columna *% s/Total Recurso*).")
                     styled_rec = (df_rec_cli[cols_rec_display]
                                   .style.format(fmt_rec)
-                                  .apply(_style_table, axis=1))
+                                  .apply(_style_table, axis=1)
+                                  .set_properties(subset=['Exp. Totales Recurso'], **{'text-align': 'right'}))
                     st.dataframe(styled_rec, use_container_width=True, hide_index=True)
                 else:
                     st.info("No se encontraron recursos para este cliente en la Carga de Trabajo.")
