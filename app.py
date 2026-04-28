@@ -127,7 +127,7 @@ if not st.session_state.logged_in:
         st.markdown(_login_logo_html, unsafe_allow_html=True)
         st.markdown("### Acuerdo Servicios Jurídicos")
         st.markdown("Introduce tus credenciales para acceder.")
-        st.caption("v2025-04-14 17:30")
+        st.caption("v2026-04-28 10:00")
         usuario_input  = st.text_input("Usuario")
         password_input = st.text_input("Contraseña", type="password")
         if st.button("Entrar", use_container_width=True, type="primary"):
@@ -207,16 +207,22 @@ divisor_meses = st.sidebar.number_input("Divisor de Presupuesto Anual (Facturaci
 st.sidebar.markdown("---")
 
 # --- Ficheros en red ---
-_ruta_red = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppCuadroDeMandos"
-_obj_red  = _os.path.join(_ruta_red, "OBJETIVOSyEQUIPOS.xlsx")
-_fact_red = _os.path.join(_ruta_red, "FACTURAS ASJ de 2019 a 2026.xlsx")
-_obj_encontrado  = _os.path.exists(_obj_red)
-_fact_encontrado = _os.path.exists(_fact_red)
+_ruta_red   = r"\\asjdc.asj.land\ASJ\Aplicaciones\AppCuadroDeMandos"
+_obj_red    = _os.path.join(_ruta_red, "OBJETIVOSyEQUIPOS.xlsx")
+_fact_red   = _os.path.join(_ruta_red, "FACTURAS ASJ de 2019 a 2026.xlsx")
+_nomen_red       = _os.path.join(_ruta_red, "NomenclaturaFacturacionVersusCargaTrabajo.xlsx")
+_nomen_rec_red   = _os.path.join(_ruta_red, "NomenclaturaRecursosVersusCargaTrabajo.xlsx")
+_obj_encontrado      = _os.path.exists(_obj_red)
+_fact_encontrado     = _os.path.exists(_fact_red)
+_nomen_encontrado    = _os.path.exists(_nomen_red)
+_nomen_rec_encontrado = _os.path.exists(_nomen_rec_red)
 
 st.sidebar.markdown("**📂 Ficheros en red:**")
 st.sidebar.markdown(
-    f"{'✅' if _obj_encontrado  else '❌'} OBJETIVOSyEQUIPOS.xlsx\n\n"
-    f"{'✅' if _fact_encontrado else '❌'} FACTURAS ASJ...xlsx"
+    f"{'✅' if _obj_encontrado       else '❌'} OBJETIVOSyEQUIPOS.xlsx\n\n"
+    f"{'✅' if _fact_encontrado      else '❌'} FACTURAS ASJ...xlsx\n\n"
+    f"{'✅' if _nomen_encontrado     else '❌'} Nomenclatura Clientes vs CT\n\n"
+    f"{'✅' if _nomen_rec_encontrado else '❌'} Nomenclatura Recursos vs CT"
 )
 with st.sidebar.expander("📤 Cargar ficheros manualmente"):
     st.caption("Usa esto solo si los ficheros en red no están disponibles.")
@@ -279,6 +285,24 @@ def badge_peso_equipo(pct, pct_fmt):
             f"border-radius:6px;padding:2px 10px;font-size:0.875rem;font-weight:bold;'>"
             f"{pct_fmt}% s/fact.</span>")
 
+def match_recurso_en_carga(nombre_eq, lista_rec_carga):
+    """Busca un recurso de EQUIPOS en la Carga de Trabajo.
+    Primero consulta la tabla de nomenclatura; si no hay entrada, usa fuzzy matching."""
+    clave = str(nombre_eq).strip().upper()
+    if clave in dict_nomenclatura_rec:
+        nombre_ct = dict_nomenclatura_rec[clave]
+        if nombre_ct in lista_rec_carga:
+            return nombre_ct
+        return get_best_match(nombre_ct, lista_rec_carga)
+    return get_best_match(nombre_eq, lista_rec_carga)
+
+def match_cliente_en_carga(nombre_canonico, lista_cli_carga):
+    """Busca un cliente (nombre canónico del Excel de Clientes) en la Carga de Trabajo.
+    Ambos usan el mismo nombre canónico, así que primero intenta exacto, luego fuzzy."""
+    if nombre_canonico in lista_cli_carga:
+        return nombre_canonico
+    return get_best_match(nombre_canonico, lista_cli_carga, threshold=70, scorer=fuzz.partial_ratio)
+
 def html_metric(label, value, sub_html=""):
     """Renderiza un bloque métrico con el mismo estilo visual que st.metric."""
     return (f"<div style='padding:0.25rem 0 0.5rem 0;'>"
@@ -301,6 +325,44 @@ usar_rutas_defecto = not obj_file and not fact_file and os.path.exists(ruta_obj_
 archivo_obj_a_leer   = obj_file   if obj_file   else (ruta_obj_defecto   if usar_rutas_defecto else None)
 archivo_fact_a_leer  = fact_file  if fact_file  else (ruta_fact_defecto  if usar_rutas_defecto else None)
 
+# Cargar tabla de nomenclatura Facturación → Carga de Trabajo
+dict_nomenclatura = {}  # {nombre_facturacion_upper: nombre_ct}
+if os.path.exists(_nomen_red):
+    try:
+        df_nomen = pd.read_excel(_nomen_red)
+        df_nomen.columns = df_nomen.columns.astype(str).str.strip()
+        _col_fact = [c for c in df_nomen.columns if 'facturaci' in c.lower()][0]
+        _col_ct   = [c for c in df_nomen.columns if 'carga' in c.lower()][0]
+        df_nomen = df_nomen.dropna(subset=[_col_fact, _col_ct])
+        dict_nomenclatura = dict(zip(
+            df_nomen[_col_fact].str.strip().str.upper(),
+            df_nomen[_col_ct].str.strip()
+        ))
+    except Exception as _e_nomen:
+        st.sidebar.caption(f"⚠️ Error leyendo nomenclatura clientes: {_e_nomen}")
+
+# Cargar tabla de nomenclatura Equipos → Carga de Trabajo
+dict_nomenclatura_rec = {}      # {nombre_equipos_upper: nombre_ct}
+dict_nomenclatura_rec_inv = {}  # {nombre_ct_upper: nombre_equipos}
+if os.path.exists(_nomen_rec_red):
+    try:
+        df_nomen_rec = pd.read_excel(_nomen_rec_red)
+        df_nomen_rec.columns = df_nomen_rec.columns.astype(str).str.strip()
+        _col_eq  = [c for c in df_nomen_rec.columns if 'equipo' in c.lower()][0]
+        _col_ct2 = [c for c in df_nomen_rec.columns if 'carga' in c.lower()][0]
+        df_nomen_rec = df_nomen_rec.dropna(subset=[_col_eq, _col_ct2])
+        dict_nomenclatura_rec = dict(zip(
+            df_nomen_rec[_col_eq].str.strip().str.upper(),
+            df_nomen_rec[_col_ct2].str.strip()
+        ))
+        # Inverso: CT name → Equipos name (para buscar desde CT hacia Equipos)
+        dict_nomenclatura_rec_inv = dict(zip(
+            df_nomen_rec[_col_ct2].str.strip().str.upper(),
+            df_nomen_rec[_col_eq].str.strip()
+        ))
+    except Exception as _e_nomen_rec:
+        st.sidebar.caption(f"⚠️ Error leyendo nomenclatura recursos: {_e_nomen_rec}")
+
 if archivo_obj_a_leer and archivo_fact_a_leer:
     try:
         # Leer CLIENTES del Excel de Objetivos
@@ -311,6 +373,19 @@ if archivo_obj_a_leer and archivo_fact_a_leer:
         # Leer EQUIPOS del Excel de Objetivos
         df_equipos = pd.read_excel(archivo_obj_a_leer, sheet_name="EQUIPOS", skiprows=3)
         df_equipos.columns = df_equipos.columns.astype(str).str.strip()
+
+        # Leer GRUPOS (grupos de recursos → miembros en Carga de Trabajo)
+        try:
+            df_grupos = pd.read_excel(archivo_obj_a_leer, sheet_name="GRUPOS")
+            df_grupos.columns = df_grupos.columns.astype(str).str.strip()
+            _col_grupo = [c for c in df_grupos.columns if 'grupo' in c.lower()][0]
+            _col_miembro = [c for c in df_grupos.columns if 'recurso' in c.lower()][0]
+            df_grupos = df_grupos.dropna(subset=[_col_grupo, _col_miembro])
+            # dict_grupos: {nombre_grupo: [miembro_ct_1, miembro_ct_2, ...]}
+            dict_grupos = df_grupos.groupby(_col_grupo)[_col_miembro].apply(list).to_dict()
+        except Exception as _e_grupos:
+            dict_grupos = {}
+            st.sidebar.warning(f"⚠️ Hoja Grupos: {_e_grupos}")
         
         # Leer FACTURAS del año
         df_facturas = pd.read_excel(archivo_fact_a_leer, sheet_name=str(año_analisis), skiprows=1)
@@ -359,15 +434,24 @@ with st.spinner("Procesando y cruzando datos..."):
             (df_facturas[col_fecha_fact].dt.month.isin(meses_seleccionados))
         ]
         
-        # Fuzzy matching con F y G
+        # Matching facturas → clientes objetivos
+        # Primero busca en la tabla de nomenclatura, luego fuzzy como fallback
         def match_cliente(row):
-            cliente_f = str(row[col_cliente_f_fact]) if pd.notna(row[col_cliente_f_fact]) else ""
-            cliente_g = str(row[col_cliente_g_fact]) if pd.notna(row[col_cliente_g_fact]) else ""
-            match_f = get_best_match(cliente_f, lista_clientes_objetivos)
-            if match_f: return match_f
-            match_g = get_best_match(cliente_g, lista_clientes_objetivos)
-            if match_g: return match_g
-            return None # No se encontró match
+            for raw in [row[col_cliente_f_fact], row[col_cliente_g_fact]]:
+                if not pd.notna(raw):
+                    continue
+                nombre = str(raw).strip()
+                # 1. Tabla de nomenclatura (exacta, sin case)
+                nombre_canonico = dict_nomenclatura.get(nombre.upper())
+                if nombre_canonico and nombre_canonico in lista_clientes_objetivos:
+                    return nombre_canonico
+                if nombre_canonico:
+                    m = get_best_match(nombre_canonico, lista_clientes_objetivos)
+                    if m: return m
+                # 2. Fuzzy directo sobre la lista de objetivos
+                m = get_best_match(nombre, lista_clientes_objetivos)
+                if m: return m
+            return None
             
         df_facturas['CLIENTE_MATCHED'] = df_facturas.apply(match_cliente, axis=1)
         
@@ -482,11 +566,27 @@ with st.spinner("Procesando y cruzando datos..."):
             lista_recursos_carga = df_carga[col_rec_carga].dropna().unique().tolist()
             exp_por_recurso_carga = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
             for rec in lista_recursos_eq:
-                match = get_best_match(str(rec), lista_recursos_carga)
-                if match:
-                    dict_expedientes[rec] = int(round(exp_por_recurso_carga.get(match, 0)))
+                rec_str = str(rec).strip()
+                if rec_str in dict_grupos:
+                    # Es un grupo: sumar expedientes de todos sus miembros
+                    total = 0
+                    found_any = False
+                    for miembro in dict_grupos[rec_str]:
+                        m = get_best_match(miembro, lista_recursos_carga)
+                        if m:
+                            found_any = True
+                            total += exp_por_recurso_carga.get(m, 0)
+                    if found_any:
+                        dict_expedientes[rec] = int(round(total))
+                    else:
+                        recursos_sin_carga.append(rec)
                 else:
-                    recursos_sin_carga.append(rec)
+                    # Recurso individual: nomenclatura + fuzzy
+                    match = match_recurso_en_carga(rec_str, lista_recursos_carga)
+                    if match:
+                        dict_expedientes[rec] = int(round(exp_por_recurso_carga.get(match, 0)))
+                    else:
+                        recursos_sin_carga.append(rec)
         else:
             recursos_sin_carga = list(lista_recursos_eq)
 
@@ -969,8 +1069,7 @@ elif st.session_state.vista_actual == 'Cliente':
         cli_coste_equipo = 0.0
         if df_carga is not None and col_cli_carga is not None:
             _lista_cli_tmp = df_carga[col_cli_carga].dropna().unique().tolist()
-            _match_cli_tmp = get_best_match(cliente_sel, _lista_cli_tmp,
-                                            scorer=fuzz.partial_ratio, threshold=70)
+            _match_cli_tmp = match_cliente_en_carga(cliente_sel, _lista_cli_tmp)
             if _match_cli_tmp:
                 _df_cc_tmp = df_carga[df_carga[col_cli_carga] == _match_cli_tmp]
                 _lista_eq_tmp = df_equipos[col_recurso_eq].dropna().unique().tolist()
@@ -1006,44 +1105,73 @@ elif st.session_state.vista_actual == 'Cliente':
         st.markdown("---")
         st.subheader("👥 Recursos relacionados con este cliente")
 
+        with st.expander("🔧 Debug grupos", expanded=False):
+            st.write("**dict_grupos:**", dict_grupos)
+
         if df_carga is not None and col_cli_carga is not None:
             lista_cli_carga = df_carga[col_cli_carga].dropna().unique().tolist()
-            # Usar partial_ratio con umbral 70: maneja typos y nombres con palabras extra
-            # (ej. "volkswagen" matchea con "vollkswagen Financial services")
-            match_cli_carga = get_best_match(cliente_sel, lista_cli_carga,
-                                             scorer=fuzz.partial_ratio, threshold=70)
+            match_cli_carga = match_cliente_en_carga(cliente_sel, lista_cli_carga)
 
             if match_cli_carga:
                 df_carga_cli = df_carga[df_carga[col_cli_carga] == match_cli_carga]
                 lista_eq_all = df_equipos[col_recurso_eq].dropna().unique().tolist()
                 _cols_acum = [c for i in meses_seleccionados for c in df_equipos.columns if meses_str[i] in c.upper()]
 
-                # Expedientes totales por recurso (en todos los clientes) para calcular proporciones
+                # Expedientes totales por recurso CT (en todos los clientes)
                 exp_totales_por_recurso = df_carga.groupby(col_rec_carga)[col_exp_carga].sum().to_dict()
 
-                rows_rec = []
+                # Mapeo inverso: miembro_ct → grupo (fuzzy sobre los miembros conocidos)
+                todos_miembros = {m: g for g, ms in dict_grupos.items() for m in ms}
+                def _grupo_de_ct(rec_ct):
+                    """Devuelve el nombre del grupo si el recurso CT pertenece a uno, o None."""
+                    rec_ct_str = str(rec_ct).strip()
+                    # Exacto primero
+                    if rec_ct_str in todos_miembros:
+                        return todos_miembros[rec_ct_str]
+                    # Fuzzy contra todos los miembros conocidos
+                    m = get_best_match(rec_ct_str, list(todos_miembros.keys()))
+                    return todos_miembros[m] if m else None
+
+                # Agregar filas: clave = nombre a mostrar (grupo o recurso individual)
+                agg = {}  # display_name → {exp_cli, exp_total, miembros_ct}
                 for _, cr in df_carga_cli.iterrows():
-                    rec_name = cr[col_rec_carga]
-                    exp_cli  = int(cr[col_exp_carga]) if pd.notna(cr[col_exp_carga]) else 0
+                    rec_ct   = str(cr[col_rec_carga]).strip()
+                    exp_cli  = float(cr[col_exp_carga]) if pd.notna(cr[col_exp_carga]) else 0.0
+                    grupo    = _grupo_de_ct(rec_ct)
+                    key      = grupo if grupo else rec_ct
 
-                    # Proporción: expedientes en este cliente / expedientes totales del recurso
-                    exp_total_rec = exp_totales_por_recurso.get(rec_name, 0)
-                    ratio = (exp_cli / exp_total_rec) if exp_total_rec > 0 else 0.0
+                    if key not in agg:
+                        agg[key] = {'exp_cli': 0.0, 'exp_total': 0.0, 'es_grupo': grupo is not None}
+                    agg[key]['exp_cli']  += exp_cli
+                    # Acumular expedientes totales de cada miembro
+                    agg[key]['exp_total'] += exp_totales_por_recurso.get(rec_ct, 0.0)
 
-                    match_eq = get_best_match(str(rec_name), lista_eq_all)
+                # Construir filas finales con costes
+                rows_rec = []
+                for display_name, datos in agg.items():
+                    exp_cli   = datos['exp_cli']
+                    exp_total = datos['exp_total']
+                    ratio     = (exp_cli / exp_total) if exp_total > 0 else 0.0
+
+                    # Buscar en EQUIPOS: primero nomenclatura inversa (CT→Equipos), luego fuzzy
+                    _clave_inv = str(display_name).strip().upper()
+                    _nombre_eq = dict_nomenclatura_rec_inv.get(_clave_inv, display_name)
+                    match_eq = _nombre_eq if _nombre_eq in lista_eq_all else get_best_match(_nombre_eq, lista_eq_all)
                     if match_eq:
-                        eq_row     = df_equipos[df_equipos[col_recurso_eq] == match_eq].iloc[0]
+                        eq_row           = df_equipos[df_equipos[col_recurso_eq] == match_eq].iloc[0]
                         coste_mens_total = float(eq_row['COSTE_MENSUAL'])
                         coste_acum_total = float(eq_row[_cols_acum].sum()) if _cols_acum else coste_mens_total * meses_transcurridos
-                        # Aplicar proporción
-                        coste_mens = coste_mens_total * ratio
-                        coste_acum = coste_acum_total * ratio
+                        coste_mens       = coste_mens_total * ratio
+                        coste_acum       = coste_acum_total * ratio
                     else:
                         coste_mens = coste_acum = 0.0
-                    rows_rec.append({'Recurso': rec_name, 'Expedientes': exp_cli,
-                                     'Exp. Totales Recurso': exp_total_rec,
-                                     '% s/Total Recurso': ratio * 100,
-                                     'Coste Mensual': coste_mens, 'Coste Acumulado': coste_acum})
+
+                    rows_rec.append({'Recurso': display_name,
+                                     'Expedientes':          int(round(exp_cli)),
+                                     'Exp. Totales Recurso': int(round(exp_total)),
+                                     '% s/Total Recurso':    ratio * 100,
+                                     'Coste Mensual':        coste_mens,
+                                     'Coste Acumulado':      coste_acum})
 
                 if rows_rec:
                     df_rec_cli = pd.DataFrame(rows_rec).sort_values('Coste Acumulado', ascending=False)
