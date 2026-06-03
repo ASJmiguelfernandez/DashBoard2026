@@ -311,9 +311,21 @@ def match_recurso_en_carga(nombre_eq, lista_rec_carga):
 
 def match_cliente_en_carga(nombre_canonico, lista_cli_carga):
     """Busca un cliente (nombre canónico del Excel de Clientes) en la Carga de Trabajo.
-    Ambos usan el mismo nombre canónico, así que primero intenta exacto, luego fuzzy."""
+    Primero consulta la tabla de nomenclatura, luego intenta exacto, y por último fuzzy."""
+    # 1. Buscar en la tabla de nomenclatura (con y sin espacios, case-insensitive)
+    clave = str(nombre_canonico).strip().upper()
+    clave_sin_espacios = clave.replace(" ", "")
+    nombre_ct = dict_nomenclatura.get(clave) or dict_nomenclatura.get(clave_sin_espacios)
+    if nombre_ct:
+        if nombre_ct in lista_cli_carga:
+            return nombre_ct
+        m = get_best_match(nombre_ct, lista_cli_carga)
+        if m:
+            return m
+    # 2. Exacto sobre la lista de Carga de Trabajo
     if nombre_canonico in lista_cli_carga:
         return nombre_canonico
+    # 3. Fuzzy como último recurso
     return get_best_match(nombre_canonico, lista_cli_carga, threshold=70, scorer=fuzz.partial_ratio)
 
 def html_metric(label, value, sub_html=""):
@@ -422,6 +434,27 @@ with st.spinner("Procesando y cruzando datos..."):
         
         df_clientes = df_clientes.dropna(subset=[col_cliente_obj])
         df_clientes[col_presupuesto_obj] = pd.to_numeric(df_clientes[col_presupuesto_obj], errors='coerce').fillna(0)
+        
+        # --- Traducir nombres de clientes según nomenclatura y agrupar ---
+        # Construir dict inverso: {nombre_facturacion_upper_sin_espacios: nombre_ct}
+        _dict_nomen_sin_espacios = {k.replace(' ', ''): v for k, v in dict_nomenclatura.items()}
+        def _traducir_cliente(nombre):
+            clave = str(nombre).strip().upper()
+            return dict_nomenclatura.get(clave) or _dict_nomen_sin_espacios.get(clave.replace(' ', '')) or nombre
+        df_clientes[col_cliente_obj] = df_clientes[col_cliente_obj].apply(_traducir_cliente)
+        
+        # Agrupar clientes que ahora tengan el mismo nombre (ej: ID Finance I + II → Acuerdo Servicios Jurídicos SL)
+        # Sumar presupuesto; para RESPONSABLE, tomar el primero del grupo
+        _cols_agrupar = {col_presupuesto_obj: 'sum'}
+        # Preservar las columnas de meses si tienen datos numéricos
+        for _mc in meses_columnas_obj:
+            if _mc in df_clientes.columns:
+                df_clientes[_mc] = pd.to_numeric(df_clientes[_mc], errors='coerce').fillna(0)
+                _cols_agrupar[_mc] = 'sum'
+        _cols_first = [c for c in df_clientes.columns if c not in [col_cliente_obj] + list(_cols_agrupar.keys())]
+        for _cf in _cols_first:
+            _cols_agrupar[_cf] = 'first'
+        df_clientes = df_clientes.groupby(col_cliente_obj, as_index=False).agg(_cols_agrupar)
         
         # Recalcular la facturación mensual basada en el divisor seleccionado en UI
         df_clientes[col_fact_mensual_obj] = df_clientes[col_presupuesto_obj] / divisor_meses
