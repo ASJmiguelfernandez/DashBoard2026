@@ -1272,3 +1272,64 @@ elif st.session_state.vista_actual == 'Cliente':
                 st.info(f"No se encontraron datos de Carga de Trabajo para '{cliente_sel}'.")
         else:
             st.info("Carga el Excel de Carga de Trabajo para ver los recursos asociados al cliente.")
+
+        # --- Detalle de facturas del cliente (suma = Fact. Acumulada) ---
+        st.markdown("---")
+        st.subheader("🧾 Detalle de facturas")
+        try:
+            df_fact_cli = df_facturas_validas[df_facturas_validas['CLIENTE_MATCHED'] == cliente_sel].copy()
+        except Exception as _e_fact_det:
+            df_fact_cli = pd.DataFrame()
+            st.caption(f"⚠️ No se pudo obtener el detalle de facturas: {_e_fact_det}")
+
+        if df_fact_cli.empty:
+            st.info("No hay facturas asociadas a este cliente en los meses seleccionados.")
+        else:
+            # Nombre del cliente tal y como aparece en la factura (col F, con fallback a col G)
+            _cli_orig = df_fact_cli[col_cliente_f_fact].where(
+                df_fact_cli[col_cliente_f_fact].notna(), df_fact_cli[col_cliente_g_fact]
+            )
+
+            det = pd.DataFrame({
+                'Fecha': pd.to_datetime(df_fact_cli[col_fecha_fact], errors='coerce'),
+                'Serie': df_fact_cli[col_serie_fact].astype(str).str.strip(),
+            })
+            # Nº de factura (columna D / índice 3) si existe en el Excel
+            if len(df_facturas.columns) > 3:
+                det['Nº Factura'] = df_fact_cli[df_facturas.columns[3]].astype(str).str.strip()
+            det['Mes'] = det['Fecha'].dt.month.map(meses_str)
+            det['Cliente (factura)'] = _cli_orig.astype(str).str.strip()
+            det['Importe'] = pd.to_numeric(df_fact_cli[col_base_fact], errors='coerce').fillna(0.0)
+
+            det = det.sort_values('Fecha').reset_index(drop=True)
+
+            total_importe = float(det['Importe'].sum())
+            n_fact = len(det)
+
+            # Preparar versión a mostrar con fila de TOTAL
+            det_show = det.copy()
+            det_show['Fecha'] = det_show['Fecha'].dt.strftime('%d/%m/%Y')
+
+            total_row = {c: '' for c in det_show.columns}
+            total_row['Cliente (factura)'] = 'TOTAL'
+            total_row['Importe'] = total_importe
+            det_show = pd.concat([det_show, pd.DataFrame([total_row])], ignore_index=True)
+
+            def _style_fact(row):
+                is_total = row['Cliente (factura)'] == 'TOTAL'
+                base = 'font-weight:bold;background-color:#f0f0f0;' if is_total else ''
+                return [base] * len(row)
+
+            styled_fact = (det_show.style
+                           .format({'Importe': fmt_eur})
+                           .apply(_style_fact, axis=1))
+
+            st.caption(f"ℹ️ {n_fact} facturas. El **TOTAL** coincide con *Fact. Acumulada* "
+                       f"({fmt_eur(cli_fact)}) para los meses seleccionados.")
+            st.dataframe(styled_fact, use_container_width=True, hide_index=True)
+
+            # Aviso interno si por algún motivo el total no cuadra con la métrica superior
+            if abs(total_importe - float(cli_fact)) > 0.01:
+                st.warning(f"⚠️ El total del detalle ({fmt_eur(total_importe)}) no coincide con "
+                           f"Fact. Acumulada ({fmt_eur(cli_fact)}). "
+                           f"Diferencia: {fmt_eur(total_importe - float(cli_fact))}.")
