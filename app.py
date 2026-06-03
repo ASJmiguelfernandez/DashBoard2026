@@ -217,12 +217,25 @@ _fact_encontrado     = _os.path.exists(_fact_red)
 _nomen_encontrado    = _os.path.exists(_nomen_red)
 _nomen_rec_encontrado = _os.path.exists(_nomen_rec_red)
 
+def _info_archivo(encontrado, ruta, nombre_corto):
+    if encontrado:
+        try:
+            mtime = _os.path.getmtime(ruta)
+            dt = datetime.datetime.fromtimestamp(mtime)
+            fecha_str = dt.strftime("%d/%m/%Y %H:%M")
+            return f"✅ **{nombre_corto}**<br><span style='font-size:0.75rem;color:#888888;margin-left:22px;'>Modificado: {fecha_str}</span>"
+        except Exception:
+            return f"✅ **{nombre_corto}**"
+    else:
+        return f"❌ **{nombre_corto}**"
+
 st.sidebar.markdown("**📂 Ficheros en red:**")
 st.sidebar.markdown(
-    f"{'✅' if _obj_encontrado       else '❌'} OBJETIVOSyEQUIPOS.xlsx\n\n"
-    f"{'✅' if _fact_encontrado      else '❌'} FACTURAS ASJ...xlsx\n\n"
-    f"{'✅' if _nomen_encontrado     else '❌'} Nomenclatura Clientes vs CT\n\n"
-    f"{'✅' if _nomen_rec_encontrado else '❌'} Nomenclatura Recursos vs CT"
+    f"{_info_archivo(_obj_encontrado, _obj_red, 'OBJETIVOSyEQUIPOS.xlsx')}<br><br>"
+    f"{_info_archivo(_fact_encontrado, _fact_red, 'FACTURAS ASJ...xlsx')}<br><br>"
+    f"{_info_archivo(_nomen_encontrado, _nomen_red, 'Nomenclatura Clientes vs CT')}<br><br>"
+    f"{_info_archivo(_nomen_rec_encontrado, _nomen_rec_red, 'Nomenclatura Recursos vs CT')}",
+    unsafe_allow_html=True
 )
 with st.sidebar.expander("📤 Cargar ficheros manualmente"):
     st.caption("Usa esto solo si los ficheros en red no están disponibles.")
