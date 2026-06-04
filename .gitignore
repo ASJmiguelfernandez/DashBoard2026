@@ -6,6 +6,9 @@
 *.xls
 *.csv
 
+# Versión generada en cada despliegue (no versionar)
+version.txt
+
 # Python
 __pycache__/
 *.pyc

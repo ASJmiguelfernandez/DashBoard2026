@@ -22,6 +22,26 @@ def abrir_en_excel(path):
     except Exception as e:
         return False, str(e)
 
+def version_str():
+    """Versión a mostrar en el login: fecha/hora del último despliegue a
+    producción (leída de version.txt, que genera el script de despliegue).
+    Si no existe (p.ej. en local), usa la fecha de modificación de app.py."""
+    _dir = _os.path.dirname(_os.path.abspath(__file__))
+    _vfile = _os.path.join(_dir, "version.txt")
+    try:
+        if _os.path.exists(_vfile):
+            with open(_vfile, "r", encoding="utf-8") as _f:
+                txt = _f.read().strip()
+            if txt:
+                return txt
+    except Exception:
+        pass
+    try:
+        _m = _os.path.getmtime(_os.path.abspath(__file__))
+        return datetime.datetime.fromtimestamp(_m).strftime("%Y-%m-%d %H:%M") + " (local)"
+    except Exception:
+        return "desconocida"
+
 def cargar_carga_desde_sql():
     """Carga los datos de Carga de Trabajo desde SQL Server.
     Se llama una sola vez por sesión y el resultado se guarda en session_state.
@@ -136,7 +156,7 @@ if not st.session_state.logged_in:
         st.markdown(_login_logo_html, unsafe_allow_html=True)
         st.markdown("### Acuerdo Servicios Jurídicos")
         st.markdown("Introduce tus credenciales para acceder.")
-        st.caption("v2026-04-28 10:00")
+        st.caption(f"v{version_str()}")
         usuario_input  = st.text_input("Usuario")
         password_input = st.text_input("Contraseña", type="password")
         if st.button("Entrar", use_container_width=True, type="primary"):
