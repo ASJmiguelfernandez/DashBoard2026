@@ -13,6 +13,15 @@ try:
 except ImportError:
     _PYODBC_OK = False
 
+def abrir_en_excel(path):
+    """Abre el fichero con la aplicación por defecto (Excel) en la máquina que
+    ejecuta la app. Pensado para uso local (cada usuario en su PC)."""
+    try:
+        _os.startfile(path)  # Windows
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 def cargar_carga_desde_sql():
     """Carga los datos de Carga de Trabajo desde SQL Server.
     Se llama una sola vez por sesión y el resultado se guarda en session_state.
@@ -242,6 +251,30 @@ with st.sidebar.expander("📤 Cargar ficheros manualmente"):
     obj_file  = st.file_uploader("Excel de OBJETIVOS Y EQUIPOS", type=['xlsx', 'xls'])
     fact_file = st.file_uploader("Excel de FACTURAS", type=['xlsx', 'xls'])
 
+# --- Refrescar datos (vacía la caché y vuelve a leer los Excel) ---
+if st.sidebar.button("🔄 Refrescar datos", use_container_width=True,
+                     help="Vuelve a leer los Excel desde la red (recoge cambios hechos en Excel)"):
+    st.cache_data.clear()
+    st.rerun()
+
+# --- Abrir ficheros en Excel (uso local: se abre en el PC que ejecuta la app) ---
+with st.sidebar.expander("✏️ Abrir en Excel"):
+    st.caption("Abre el fichero en Excel en **este equipo**. Tras editar y guardar "
+               "en Excel, pulsa **🔄 Refrescar datos** para ver los cambios.")
+    _abribles = [
+        ("OBJETIVOS y EQUIPOS",          _obj_red,        _obj_encontrado),
+        ("FACTURAS",                     _fact_red,       _fact_encontrado),
+        ("Nomenclatura Clientes vs CT",  _nomen_red,      _nomen_encontrado),
+        ("Nomenclatura Recursos vs CT",  _nomen_rec_red,  _nomen_rec_encontrado),
+    ]
+    for _et, _ruta, _ok in _abribles:
+        if st.button(f"📂 {_et}", key=f"abrir_{_et}", use_container_width=True, disabled=not _ok):
+            _done, _err = abrir_en_excel(_ruta)
+            if _done:
+                st.success(f"Abriendo «{_et}» en Excel…")
+            else:
+                st.error(f"No se pudo abrir: {_err}")
+
 st.sidebar.markdown("---")
 
 meses_str = {1: 'ENERO', 2: 'FEBRERO', 3: 'MARZO', 4: 'ABRIL', 5: 'MAYO', 6: 'JUNIO', 
@@ -267,6 +300,26 @@ def fmt_eur(value):
         return f"€ {formatted}"
     except (TypeError, ValueError):
         return ""
+
+# ================================
+# LECTURA DE EXCEL CON CACHÉ
+# ================================
+@st.cache_data(show_spinner=False)
+def _read_excel_cached(path, mtime, sheet_name=0, skiprows=0):
+    """Lectura cacheada. 'mtime' forma parte de la clave: si el fichero cambia
+    en disco, la caché se invalida automáticamente."""
+    return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows)
+
+def leer_excel(src, sheet_name=0, skiprows=0):
+    """Lee un Excel. Para rutas (str) usa caché basada en la fecha de modificación;
+    para ficheros subidos (file_uploader) lee directamente."""
+    if isinstance(src, str):
+        try:
+            mtime = _os.path.getmtime(src)
+        except OSError:
+            mtime = 0
+        return _read_excel_cached(src, mtime, sheet_name=sheet_name, skiprows=skiprows).copy()
+    return pd.read_excel(src, sheet_name=sheet_name, skiprows=skiprows)
 
 def color_estado(pct):
     """Devuelve el estilo CSS de celda según el % de cumplimiento."""
@@ -354,7 +407,7 @@ archivo_fact_a_leer  = fact_file  if fact_file  else (ruta_fact_defecto  if usar
 dict_nomenclatura = {}  # {nombre_facturacion_upper: nombre_ct}
 if os.path.exists(_nomen_red):
     try:
-        df_nomen = pd.read_excel(_nomen_red)
+        df_nomen = leer_excel(_nomen_red)
         df_nomen.columns = df_nomen.columns.astype(str).str.strip()
         _col_fact = [c for c in df_nomen.columns if 'facturaci' in c.lower()][0]
         _col_ct   = [c for c in df_nomen.columns if 'carga' in c.lower()][0]
@@ -371,7 +424,7 @@ dict_nomenclatura_rec = {}      # {nombre_equipos_upper: nombre_ct}
 dict_nomenclatura_rec_inv = {}  # {nombre_ct_upper: nombre_equipos}
 if os.path.exists(_nomen_rec_red):
     try:
-        df_nomen_rec = pd.read_excel(_nomen_rec_red)
+        df_nomen_rec = leer_excel(_nomen_rec_red)
         df_nomen_rec.columns = df_nomen_rec.columns.astype(str).str.strip()
         _col_eq  = [c for c in df_nomen_rec.columns if 'equipo' in c.lower()][0]
         _col_ct2 = [c for c in df_nomen_rec.columns if 'carga' in c.lower()][0]
@@ -391,17 +444,17 @@ if os.path.exists(_nomen_rec_red):
 if archivo_obj_a_leer and archivo_fact_a_leer:
     try:
         # Leer CLIENTES del Excel de Objetivos
-        df_clientes = pd.read_excel(archivo_obj_a_leer, sheet_name="CLIENTES", skiprows=3)
+        df_clientes = leer_excel(archivo_obj_a_leer, sheet_name="CLIENTES", skiprows=3)
         # Limpiar nombres de columnas
         df_clientes.columns = df_clientes.columns.astype(str).str.strip()
         
         # Leer EQUIPOS del Excel de Objetivos
-        df_equipos = pd.read_excel(archivo_obj_a_leer, sheet_name="EQUIPOS", skiprows=3)
+        df_equipos = leer_excel(archivo_obj_a_leer, sheet_name="EQUIPOS", skiprows=3)
         df_equipos.columns = df_equipos.columns.astype(str).str.strip()
 
         # Leer GRUPOS (grupos de recursos → miembros en Carga de Trabajo)
         try:
-            df_grupos = pd.read_excel(archivo_obj_a_leer, sheet_name="GRUPOS")
+            df_grupos = leer_excel(archivo_obj_a_leer, sheet_name="GRUPOS")
             df_grupos.columns = df_grupos.columns.astype(str).str.strip()
             _col_grupo = [c for c in df_grupos.columns if 'grupo' in c.lower()][0]
             _col_miembro = [c for c in df_grupos.columns if 'recurso' in c.lower()][0]
@@ -413,7 +466,7 @@ if archivo_obj_a_leer and archivo_fact_a_leer:
             st.sidebar.warning(f"⚠️ Hoja Grupos: {_e_grupos}")
         
         # Leer FACTURAS del año
-        df_facturas = pd.read_excel(archivo_fact_a_leer, sheet_name=str(año_analisis), skiprows=1)
+        df_facturas = leer_excel(archivo_fact_a_leer, sheet_name=str(año_analisis), skiprows=1)
         df_facturas.columns = df_facturas.columns.astype(str).str.strip()
         
     except Exception as e:
