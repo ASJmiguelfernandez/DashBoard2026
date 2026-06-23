@@ -341,6 +341,33 @@ def leer_excel(src, sheet_name=0, skiprows=0):
         return _read_excel_cached(src, mtime, sheet_name=sheet_name, skiprows=skiprows).copy()
     return pd.read_excel(src, sheet_name=sheet_name, skiprows=skiprows)
 
+def _df_a_excel_bytes(df, sheet_name="Datos"):
+    """Serializa un DataFrame a bytes .xlsx en memoria."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    return buf.getvalue()
+
+def boton_descarga_excel(df, nombre_archivo, label="⬇️ Descargar Excel", key=None, decimales=2):
+    """Botón de descarga a Excel (.xlsx) con los números redondeados, para que
+    el fichero abra limpio en Excel (números reales, sin ruido decimal ni
+    problemas de separadores de los CSV)."""
+    df_out = df.copy()
+    for c in df_out.columns:
+        if pd.api.types.is_float_dtype(df_out[c]):
+            df_out[c] = df_out[c].round(decimales)
+    st.download_button(
+        label,
+        data=_df_a_excel_bytes(df_out),
+        file_name=nombre_archivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
+
+def _safe_filename(s):
+    """Convierte un texto en un fragmento de nombre de archivo seguro."""
+    return "".join(ch if (ch.isalnum() or ch in " -_") else "_" for ch in str(s)).strip()
+
 def color_estado(pct):
     """Devuelve el estilo CSS de celda según el % de cumplimiento."""
     try:
@@ -877,6 +904,7 @@ if st.session_state.vista_actual == 'Global':
     st.markdown("---")
     st.subheader("📋 Resumen por Responsable")
     resumen_rows = []
+    resumen_rows_num = []
     for resp_r in lista_todos_resp:
         df_r = df_clientes[df_clientes[col_responsable_obj] == resp_r]
         r_obj_anual = df_r[col_presupuesto_obj].sum()
@@ -893,12 +921,22 @@ if st.session_state.vista_actual == 'Global':
             'Diferencia': r_dif_fmt if r_dif >= 0 else f"-{r_dif_fmt}",
             '% Cumplimiento': r_pct,
         })
+        resumen_rows_num.append({
+            'Responsable': resp_r,
+            'Obj. Anual': r_obj_anual,
+            'Obj. Acumulado': r_obj_acum,
+            'Fact. Acumulada': r_fact,
+            'Diferencia': r_dif,
+            '% Cumplimiento': r_pct,
+        })
     df_resumen = pd.DataFrame(resumen_rows)
+    df_resumen_num = pd.DataFrame(resumen_rows_num)
 
     df_resumen_styled = df_resumen.style\
         .format({'% Cumplimiento': lambda v: f"{v:,.1f} %".replace(',', 'X').replace('.', ',').replace('X', '.')})\
         .map(color_estado, subset=['% Cumplimiento'])
     st.dataframe(df_resumen_styled, use_container_width=True, hide_index=True)
+    boton_descarga_excel(df_resumen_num, "resumen_por_responsable.xlsx", key="dl_resumen_resp")
 
 elif st.session_state.vista_actual == 'Detalle':
     if st.button("⬅️ Volver a Vista Global"):
@@ -1039,12 +1077,14 @@ elif st.session_state.vista_actual == 'Detalle':
         for m in columnas_meses_presentes:
             format_dict[m] = "€ {:,.2f}"
 
+        df_mostrar = df_resp[cols_mostrar].sort_values('Objetivo Acumulado', ascending=False)
         try:
-            df_mostrar = df_resp[cols_mostrar].sort_values('Objetivo Acumulado', ascending=False)
             styled_df = df_mostrar.style.format(format_dict).map(color_estado, subset=['% Cumplimiento'])
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
         except:
-            st.dataframe(df_resp[cols_mostrar].sort_values('Objetivo Acumulado', ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        boton_descarga_excel(df_mostrar, f"detalle_clientes_{_safe_filename(resp)}.xlsx",
+                             key="dl_detalle_clientes")
 
     # --- Recursos del equipo (expandible) ---
     with st.expander("👥 Recursos del Equipo", expanded=False):
@@ -1090,9 +1130,13 @@ elif st.session_state.vista_actual == 'Detalle':
                     return ''
 
             cols_display = ['Recurso', 'Presupuesto Anual', 'Presupuesto Acumulado', 'Coste Acumulado', 'Desviación %', 'Expedientes'] + cols_meses_eq
-            styled_eq = df_eq[cols_display].style.format(fmt_eq).map(color_desv, subset=['Desviación %'])
+            df_eq_display = df_eq[cols_display].copy()
+            styled_eq = df_eq_display.style.format(fmt_eq).map(color_desv, subset=['Desviación %'])
             st.dataframe(styled_eq, use_container_width=True, hide_index=True)
             st.caption(f"Coste total acumulado del equipo hasta mes anterior: **{fmt_eur(coste_total_equipos)}**")
+
+            boton_descarga_excel(df_eq_display, f"recursos_equipo_{_safe_filename(resp)}.xlsx",
+                                 key="dl_recursos_equipo")
 
 elif st.session_state.vista_actual == 'Anomalias':
     if st.button("⬅️ Volver a Vista Global"):
@@ -1115,6 +1159,7 @@ elif st.session_state.vista_actual == 'Anomalias':
             df_anom_facturas.style.format(fmt_fact),
             use_container_width=True, hide_index=True
         )
+        boton_descarga_excel(df_anom_facturas, "anomalias_facturas_sin_cliente.xlsx", key="dl_anom_fact")
 
     # --- 2. Recursos sin responsable ---
     st.markdown("---")
@@ -1128,6 +1173,7 @@ elif st.session_state.vista_actual == 'Anomalias':
             df_anom_recursos.style.format({'Presupuesto Anual': lambda x: fmt_eur(x) if pd.notna(x) else ""}),
             use_container_width=True, hide_index=True
         )
+        boton_descarga_excel(df_anom_recursos, "anomalias_recursos_sin_responsable.xlsx", key="dl_anom_rec")
 
     # --- 3. Clientes sin responsable ---
     st.markdown("---")
@@ -1141,6 +1187,7 @@ elif st.session_state.vista_actual == 'Anomalias':
             df_anom_clientes.style.format({'Presupuesto Anual': lambda x: fmt_eur(x) if pd.notna(x) else ""}),
             use_container_width=True, hide_index=True
         )
+        boton_descarga_excel(df_anom_clientes, "anomalias_clientes_sin_responsable.xlsx", key="dl_anom_cli")
 
     # --- 4. Recursos sin match en Carga de Trabajo ---
 
@@ -1153,7 +1200,9 @@ elif st.session_state.vista_actual == 'Anomalias':
         st.success("Todos los recursos tienen datos de carga de trabajo. ✅")
     else:
         st.warning(f"{n4} recursos del equipo no se encontraron en la Carga de Trabajo (fuzzy matching < 80%). Su número de operaciones aparecerá como 0.")
-        st.dataframe(pd.DataFrame({'Recurso': recursos_sin_carga}), use_container_width=True, hide_index=True)
+        _df_sin_carga = pd.DataFrame({'Recurso': recursos_sin_carga})
+        st.dataframe(_df_sin_carga, use_container_width=True, hide_index=True)
+        boton_descarga_excel(_df_sin_carga, "anomalias_recursos_sin_carga.xlsx", key="dl_anom_sincarga")
 
 elif st.session_state.vista_actual == 'Cliente':
     cliente_sel = st.session_state.cliente_seleccionado
@@ -1339,6 +1388,9 @@ elif st.session_state.vista_actual == 'Cliente':
                                   .apply(_style_table, axis=1)
                                   .set_properties(subset=['Exp. Totales Recurso'], **{'text-align': 'right'}))
                     st.dataframe(styled_rec, use_container_width=True, hide_index=True)
+                    boton_descarga_excel(df_rec_cli[cols_rec_display],
+                                         f"recursos_cliente_{_safe_filename(cliente_sel)}.xlsx",
+                                         key="dl_recursos_cliente")
                 else:
                     st.info("No se encontraron recursos para este cliente en la Carga de Trabajo.")
             else:
@@ -1400,6 +1452,8 @@ elif st.session_state.vista_actual == 'Cliente':
             st.caption(f"ℹ️ {n_fact} facturas. El **TOTAL** coincide con *Fact. Acumulada* "
                        f"({fmt_eur(cli_fact)}) para los meses seleccionados.")
             st.dataframe(styled_fact, use_container_width=True, hide_index=True)
+            boton_descarga_excel(det_show, f"detalle_facturas_{_safe_filename(cliente_sel)}.xlsx",
+                                 key="dl_detalle_facturas")
 
             # Aviso interno si por algún motivo el total no cuadra con la métrica superior
             if abs(total_importe - float(cli_fact)) > 0.01:
