@@ -6,6 +6,8 @@ from thefuzz import process, fuzz
 import io
 import base64
 import os as _os
+import html as _html
+import streamlit.components.v1 as components
 
 try:
     import pyodbc
@@ -270,7 +272,7 @@ if st.sidebar.button("🔄 Refrescar datos", use_container_width=True,
 
 # --- Rutas de los ficheros (para abrirlos en Excel desde tu propio equipo) ---
 with st.sidebar.expander("📂 Rutas de los ficheros (abrir en Excel)"):
-    st.caption("Copia la ruta (icono 📋) y pégala en el **Explorador de Windows** o en "
+    st.caption("Pulsa **Copiar** y pega la ruta en el **Explorador de Windows** o en "
                "**Archivo → Abrir** de Excel. Tras editar y guardar, pulsa **🔄 Refrescar datos**.")
     _rutas = [
         ("OBJETIVOS y EQUIPOS",          _obj_red,        _obj_encontrado),
@@ -278,9 +280,41 @@ with st.sidebar.expander("📂 Rutas de los ficheros (abrir en Excel)"):
         ("Nomenclatura Clientes vs CT",  _nomen_red,      _nomen_encontrado),
         ("Nomenclatura Recursos vs CT",  _nomen_rec_red,  _nomen_rec_encontrado),
     ]
+    _rows_html = ""
     for _et, _ruta, _ok in _rutas:
-        st.markdown(f"{'✅' if _ok else '❌'} **{_et}**")
-        st.code(_ruta, language=None)
+        _mark = "✅" if _ok else "❌"
+        _lbl = _html.escape(f"{_mark} {_et}")
+        _val = _html.escape(_ruta, quote=True)
+        _rows_html += (f'<div class="row"><div class="lbl">{_lbl}</div>'
+                       f'<div class="cp"><input type="text" readonly value="{_val}"/>'
+                       f'<button onclick="cp(this)">Copiar</button></div></div>')
+    components.html(
+        "<style>"
+        "*{box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,sans-serif;}"
+        "body{margin:0;}"
+        ".row{margin-bottom:10px;}"
+        ".lbl{font-size:12px;font-weight:600;margin-bottom:3px;color:#31333F;}"
+        ".cp{display:flex;gap:4px;}"
+        ".cp input{flex:1;min-width:0;font-size:11px;padding:4px 6px;border:1px solid #ccc;"
+        "border-radius:6px;background:#f6f6f6;color:#333;}"
+        ".cp button{font-size:11px;padding:4px 8px;border:1px solid #0068c9;background:#0068c9;"
+        "color:#fff;border-radius:6px;cursor:pointer;white-space:nowrap;}"
+        ".cp button:hover{background:#0055a8;}"
+        "</style>"
+        f"{_rows_html}"
+        "<script>"
+        "function cp(btn){"
+        "  var inp=btn.previousElementSibling;"
+        "  inp.focus();inp.select();inp.setSelectionRange(0,99999);"
+        "  var ok=false;"
+        "  try{ok=document.execCommand('copy');}catch(e){}"
+        "  if(navigator.clipboard){try{navigator.clipboard.writeText(inp.value);ok=true;}catch(e){}}"
+        "  var old=btn.textContent;btn.textContent=ok?'✓ Copiado':'Ctrl+C';"
+        "  setTimeout(function(){btn.textContent=old;},1500);"
+        "}"
+        "</script>",
+        height=260,
+    )
 
 st.sidebar.markdown("---")
 
