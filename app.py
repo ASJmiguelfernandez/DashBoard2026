@@ -13,15 +13,6 @@ try:
 except ImportError:
     _PYODBC_OK = False
 
-def abrir_en_excel(path):
-    """Abre el fichero con la aplicación por defecto (Excel) en la máquina que
-    ejecuta la app. Pensado para uso local (cada usuario en su PC)."""
-    try:
-        _os.startfile(path)  # Windows
-        return True, None
-    except Exception as e:
-        return False, str(e)
-
 def version_str():
     """Versión a mostrar en el login: fecha/hora del último despliegue a
     producción (leída de version.txt, que genera el script de despliegue).
@@ -277,23 +268,19 @@ if st.sidebar.button("🔄 Refrescar datos", use_container_width=True,
     st.cache_data.clear()
     st.rerun()
 
-# --- Abrir ficheros en Excel (uso local: se abre en el PC que ejecuta la app) ---
-with st.sidebar.expander("✏️ Abrir en Excel"):
-    st.caption("Abre el fichero en Excel en **este equipo**. Tras editar y guardar "
-               "en Excel, pulsa **🔄 Refrescar datos** para ver los cambios.")
-    _abribles = [
+# --- Rutas de los ficheros (para abrirlos en Excel desde tu propio equipo) ---
+with st.sidebar.expander("📂 Rutas de los ficheros (abrir en Excel)"):
+    st.caption("Copia la ruta (icono 📋) y pégala en el **Explorador de Windows** o en "
+               "**Archivo → Abrir** de Excel. Tras editar y guardar, pulsa **🔄 Refrescar datos**.")
+    _rutas = [
         ("OBJETIVOS y EQUIPOS",          _obj_red,        _obj_encontrado),
         ("FACTURAS",                     _fact_red,       _fact_encontrado),
         ("Nomenclatura Clientes vs CT",  _nomen_red,      _nomen_encontrado),
         ("Nomenclatura Recursos vs CT",  _nomen_rec_red,  _nomen_rec_encontrado),
     ]
-    for _et, _ruta, _ok in _abribles:
-        if st.button(f"📂 {_et}", key=f"abrir_{_et}", use_container_width=True, disabled=not _ok):
-            _done, _err = abrir_en_excel(_ruta)
-            if _done:
-                st.success(f"Abriendo «{_et}» en Excel…")
-            else:
-                st.error(f"No se pudo abrir: {_err}")
+    for _et, _ruta, _ok in _rutas:
+        st.markdown(f"{'✅' if _ok else '❌'} **{_et}**")
+        st.code(_ruta, language=None)
 
 st.sidebar.markdown("---")
 
